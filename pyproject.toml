@@ -14,7 +14,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "pytest-timeout", "ruff"]
+# ruff pinned to match the gateway repo's installed version exactly: identical
+# code must lint identically in both repos while this move is being audited,
+# and ruff's default rule set has grown between 0.15.20 and later releases,
+# so an unpinned ruff here would flag byte-identical code the gateway doesn't.
+dev = ["pytest", "pytest-asyncio", "pytest-timeout", "ruff==0.15.20"]
 
 [project.scripts]
 livehost = "livehost.cli:main"

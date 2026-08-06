@@ -3,6 +3,14 @@ queue, and reconnects on failure without ever affecting the rest of the
 livehost session (voice keeps working if TikTok drops).
 
 See docs/superpowers/specs/2026-07-05-livehost-tiktok-cohost-design.md section 3.
+
+Adapts the real TikTokLive client's callback API to the connect()/events()/
+close() protocol TikTokLiveIngestor expects (see ingestor.LiveClientProtocol),
+normalizing its event objects into SocialEvent.
+
+Mapping helpers (map_comment etc.) are pure and duck-typed so they're unit
+testable without the real TikTokLive proto classes; only TikTokLiveClientAdapter
+itself touches the actual library.
 """
 
 from __future__ import annotations
@@ -10,6 +18,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
+import uuid
 from collections.abc import Callable
 from enum import Enum
 from typing import Any, Protocol
@@ -161,19 +171,6 @@ class TikTokLiveIngestor:
     async def _sleep_backoff(self, backoff: float) -> None:
         jitter = random.uniform(0, backoff * 0.25)
         await asyncio.sleep(backoff + jitter)
-
-
-"""Adapts the real TikTokLive client's callback API to the connect()/events()/
-close() protocol TikTokLiveIngestor expects (see ingestor.LiveClientProtocol),
-normalizing its event objects into SocialEvent.
-
-Mapping helpers (map_comment etc.) are pure and duck-typed so they're unit
-testable without the real TikTokLive proto classes; only TikTokLiveClientAdapter
-itself touches the actual library.
-"""
-
-import time
-import uuid
 
 
 def avatar_url(user) -> str | None:
