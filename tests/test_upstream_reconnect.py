@@ -31,13 +31,22 @@ class FlakyUpstream:
 
 
 async def test_the_upstream_is_redialled_after_a_drop():
-    from livehost.api.ws import relay_with_reconnect
+    """Exercises `_redial` directly -- the one reconnect loop `_down()` also
+    calls in production -- rather than a second, standalone copy of the
+    same shape. Two such copies existed at one point and had already
+    diverged (one dialled on every attempt, the other gated the first), and
+    this test was asserting against the one that never shipped."""
+    from livehost.api.ws import _redial
 
     upstream = FlakyUpstream()
     events = []
 
+    async def run_once():
+        async for message in upstream.events():
+            events.append(message)
+
     async def run():
-        await relay_with_reconnect(upstream, events.append, lambda b: None, max_attempts=2)
+        await _redial(upstream, run_once, max_attempts=2, already_connected=False, label="upstream")
 
     await asyncio.wait_for(run(), timeout=5)
     assert upstream.connects == 2
@@ -103,9 +112,9 @@ def test_the_ingestor_is_never_torn_down_by_an_upstream_drop(gateway, authed, mo
     hiccup must not spend it.
 
     This drives the real WS handler end to end (not a bare call to
-    `relay_with_reconnect`, which never sees an ingestor at all and so could
-    not fail this way) so the ingestor is genuinely reachable from the code
-    under test: `TikTokLiveIngestor.stop` is monkeypatched at the class
+    `_redial`, which never sees an ingestor at all and so could not fail
+    this way) so the ingestor is genuinely reachable from the code under
+    test: `TikTokLiveIngestor.stop` is monkeypatched at the class
     level, meaning it is the *live* session's own ingestor -- sitting right
     alongside the reconnect loop in `livehost_stream`'s closure -- and this
     would catch a reconnect path that mistakenly called it. `Upstream.events`
@@ -158,3 +167,88 @@ def test_the_ingestor_is_never_torn_down_by_an_upstream_drop(gateway, authed, mo
             # asserting after the `with` blocks exit would pass even if the
             # reconnect path itself never touched the ingestor.
             assert stopped == []
+
+
+def test_a_mid_turn_drop_does_not_leave_the_cohost_permanently_silent(gateway, authed, monkeypatch):
+    """A drop between speech_start and turn_done -- the streamer mid
+    utterance, a completely ordinary moment -- must not leave voice_active
+    stuck True forever.
+
+    The resumed gateway session has a fresh endpointer and will never emit
+    a turn_done for an utterance it never saw, so without `_down()`
+    resetting `voice_active`/`social_turn_in_flight` on every redial,
+    `poll_social_turn` would be starved permanently and the co-host would
+    go silent for the rest of the session -- the same permanently-silent
+    failure Task 8 built a guard for, arriving through the reconnect path
+    instead. `Upstream.events` is wrapped to drop the connection exactly
+    once, right after the real fake-gateway `speech_start` (not merely
+    after `session_started`, which would never enter the mid-turn state at
+    all), so this exercises the actual failure window. Confirmed to bite:
+    removing the flag reset in `_down()`'s `_run_once` makes this test fail
+    (verified by hand; see task-10-report.md).
+    """
+    from livehost.app import app
+    from livehost.registry import livehost_registry
+    from livehost.schemas import SocialEvent
+    from livehost.upstream import Upstream
+
+    # Zero, not just small: matches test_ws_social.py's own arbitration
+    # test -- the fake's round trip can complete well under a real timer's
+    # resolution, so a real interval could miss the window entirely.
+    monkeypatch.setattr("livehost.api.ws._SOCIAL_POLL_SECONDS", 0.0)
+
+    real_events = Upstream.events
+    dropped = {"done": False}
+
+    async def _events_that_drop_after_speech_start(self):
+        async for message in real_events(self):
+            yield message
+            if (
+                not dropped["done"]
+                and isinstance(message, dict)
+                and message.get("event") == "speech_start"
+            ):
+                dropped["done"] = True
+                raise ConnectionError("simulated mid-turn drop")
+
+    monkeypatch.setattr(Upstream, "events", _events_that_drop_after_speech_start)
+
+    session_id = "midturn-1"
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            f"/v1/livehost/stream?ticket=good&session_id={session_id}"
+        ) as ws:
+            started = ws.receive_json()
+            assert started["event"] == "session_started"
+
+            ws.send_bytes(b"MIC")
+            speech_start = ws.receive_json()
+            assert speech_start["event"] == "speech_start"
+
+            # The drop is injected right after the speech_start above; the
+            # handler must redial -- a second session_started proves it
+            # actually did, rather than this test passing because nothing
+            # dropped at all.
+            resumed = ws.receive_json()
+            assert resumed["event"] == "session_started"
+
+            # If voice_active were still stuck True from the aborted turn,
+            # this queued turn would never fire.
+            session = livehost_registry.get(session_id)
+            session.scheduler.enqueue(
+                SocialEvent(
+                    id="e1",
+                    kind="comment",
+                    user_id="u1",
+                    user_name="ann",
+                    text="hi",
+                    timestamp=0.0,
+                )
+            )
+            deadline = time.monotonic() + 5
+            while session.scheduler.pending_count() != 0 and time.monotonic() < deadline:
+                time.sleep(0.005)
+
+    control_texts = [c for c in gateway["control"] if c.get("type") == "text"]
+    assert len(control_texts) == 1
+    assert "ann" in control_texts[0]["text"]

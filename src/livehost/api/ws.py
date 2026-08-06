@@ -21,7 +21,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from livehost.auth import introspect
 from livehost.ingest.tiktok import TikTokLiveIngestor
 from livehost.registry import LivehostSession, livehost_registry
-from livehost.relay import Relay, _maybe_await
+from livehost.relay import Relay
 from livehost.scheduler import EventScheduler
 from livehost.settings import settings
 from livehost.upstream import Upstream
@@ -44,44 +44,61 @@ def _mention_keywords() -> list[str]:
 
 
 def resume_params(params: dict, session_id: str | None) -> dict:
-    """Upstream query params for a reconnect. session_id is what keeps the
-    gateway writing to the same stored session, so history does not fork."""
+    """Query params for the Upstream connection that will later be resumed.
+
+    Called exactly once, when the Upstream's URL is first built (see
+    `livehost_stream` below) -- NOT once per reconnect attempt. Continuity
+    across a later drop comes from `_redial()` simply redialling that same
+    fixed URL, not from calling this function again; a maintainer reading
+    `_down()`/`_redial()` looking for a per-attempt call to this should not
+    expect to find one. Baking `session_id` in here, up front, is what makes
+    that later redial land on the same gateway-side stored session instead
+    of forking history.
+    """
     resumed = dict(params)
     if session_id:
         resumed["session_id"] = session_id
     return resumed
 
 
-async def relay_with_reconnect(upstream, send_json, send_bytes, max_attempts: int = 5) -> None:
-    """Relay downstream, redialling the gateway when it drops.
+async def _redial(
+    upstream,
+    run_once,
+    *,
+    max_attempts: int,
+    already_connected: bool,
+    label: str,
+) -> None:
+    """Retry `run_once()` against `upstream`, redialling on a drop.
 
-    Standalone and Relay-agnostic on purpose: it knows nothing about
-    voice_active arbitration, the ingestor, or the registry -- it only
-    reconnects `upstream` and forwards whatever it yields. The handler
-    below does not call this directly (see `_down()`'s docstring for why);
-    it exists as the plain, directly-testable shape of the reconnect loop
-    that `_down()` follows.
+    The one and only reconnect loop: attempt counting, backoff, the
+    max-attempts bound, and the exception clause all live here exactly
+    once, so production (`_down()`, below) and anything that tests the
+    retry mechanics exercise the identical code path -- two independent
+    copies of this shape previously existed and had already silently
+    diverged (one connected on every attempt, the other gated it), and nothing
+    was testing the one that shipped.
 
-    The ingestor is deliberately NOT in scope here: a TikTok connection costs
-    backoff and time to rebuild, and an upstream hiccup must not spend it.
-    Social events keep accumulating in the scheduler's bounded queue during the
-    gap and are subject to its existing overflow behaviour.
+    `already_connected=True` skips `upstream.connect()` on the very first
+    attempt, for a caller (like `_down()`) that already holds a live
+    connection before this loop starts; later attempts always reconnect
+    first. `run_once` is whatever should happen for the duration of one
+    connection attempt -- this function knows nothing about what that is
+    (Relay, arbitration, plain event forwarding, ...), which is what keeps
+    it reusable without coupling it to any of them.
     """
     attempt = 0
     while attempt < max_attempts:
         attempt += 1
         try:
-            await upstream.connect()
-            async for message in upstream.events():
-                if isinstance(message, bytes):
-                    await _maybe_await(send_bytes(message))
-                else:
-                    await _maybe_await(send_json(message))
+            if not (already_connected and attempt == 1):
+                await upstream.connect()
+            await run_once()
             return
         except (ConnectionError, OSError) as exc:
-            logger.warning("upstream dropped (attempt %d/%d): %s", attempt, max_attempts, exc)
+            logger.warning("%s dropped (attempt %d/%d): %s", label, attempt, max_attempts, exc)
             await asyncio.sleep(min(2 ** (attempt - 1), 10))
-    logger.error("giving up on the upstream after %d attempts", max_attempts)
+    logger.error("giving up on %s after %d attempts", label, max_attempts)
 
 
 @router.websocket("/stream")
@@ -134,6 +151,13 @@ async def livehost_stream(websocket: WebSocket) -> None:
     # the same gateway-side stored session: resume_params bakes it into the
     # query once, here, and every subsequent upstream.connect() reuses that
     # same URL verbatim.
+    #
+    # Sending it even when the browser omitted one (so it names an id the
+    # gateway has never seen) is safe: per the gateway's own
+    # ws_session_owner_denied contract, that function is "True if session_id
+    # already exists and is not owned by the caller" -- an id it has never
+    # seen is not denied, and ConversationSession.start() creates it fresh.
+    # Checked against the gateway source during Task 10 review, not assumed.
     upstream = Upstream(
         settings.gateway_url,
         ticket,
@@ -176,44 +200,50 @@ async def livehost_stream(websocket: WebSocket) -> None:
         conversation socket drops -- without disturbing the ingestor.
 
         Wiring choice (Task 10): the reconnect loop wraps `relay.pump_down`
-        from the outside, rather than `pump_down` growing a `reconnect`
-        parameter. That keeps `Relay.pump_down` itself -- and
-        tests/test_relay.py, which calls it directly and unpatched -- exactly
-        as Task 8 left it. Every attempt below re-enters `pump_down`, so its
-        per-message arbitration (`voice_active`, barge-in abort) keeps
-        running across a reconnect the same as it does within one unbroken
-        connection.
+        from the outside (via the shared `_redial()` above), rather than
+        `pump_down` growing a `reconnect` parameter. That keeps
+        `Relay.pump_down` itself -- and tests/test_relay.py, which calls it
+        directly and unpatched -- exactly as Task 8 left it. Every attempt
+        re-enters `pump_down`, so its per-message arbitration (`voice_active`,
+        barge-in abort) keeps running across a reconnect the same as it does
+        within one unbroken connection.
 
-        `upstream` is the only thing redialled, and only `upstream.connect()`
-        is called -- the session_id already baked into its URL (see
-        `resume_params` above) is unchanged by a reconnect, so the gateway
-        resumes the same stored session instead of forking history. The
-        ingestor never appears in this function, on purpose: it is a
-        separate, far more expensive connection (its own backoff, its own
-        offline polling), and an upstream hiccup here must not cost it --
-        nothing below stops, restarts, or otherwise reaches `ingestor`.
+        Both arbitration flags are reset immediately before every attempt
+        (including redials). This matters: after a drop the plugin knows
+        nothing about the gateway's runtime state, and resuming by
+        session_id restores *history*, not endpointer state -- the resumed
+        connection has a fresh endpointer that will never emit a turn_done
+        for an utterance it never saw. Without this reset, a drop between
+        speech_start and turn_done would leave voice_active stuck True
+        forever, starving poll_social_turn and going silent for the rest of
+        the session -- the same permanently-silent failure Task 8 guarded
+        against, arriving through the reconnect path instead. A drop
+        mid-social-turn would symmetrically leave social_turn_in_flight
+        stuck True, firing a spurious abort on the next real speech_start.
+        Resetting says: the new connection starts with nobody talking and no
+        social turn in flight, which is the truth.
+
+        `upstream` is the only thing redialled -- the session_id already
+        baked into its URL (see `resume_params` above) is unchanged by a
+        reconnect, so the gateway resumes the same stored session instead of
+        forking history. The ingestor never appears in this function, on
+        purpose: it is a separate, far more expensive connection (its own
+        backoff, its own offline polling), and an upstream hiccup here must
+        not cost it -- nothing below stops, restarts, or otherwise reaches
+        `ingestor`.
         """
-        attempt = 0
-        while attempt < _UPSTREAM_RECONNECT_MAX_ATTEMPTS:
-            attempt += 1
-            try:
-                if attempt > 1:
-                    await upstream.connect()
-                await relay.pump_down(websocket.send_json, websocket.send_bytes)
-                return
-            except (ConnectionError, OSError) as exc:
-                logger.warning(
-                    "upstream dropped for %s (attempt %d/%d): %s",
-                    session_id,
-                    attempt,
-                    _UPSTREAM_RECONNECT_MAX_ATTEMPTS,
-                    exc,
-                )
-                await asyncio.sleep(min(2 ** (attempt - 1), 10))
-        logger.error(
-            "giving up on the upstream for %s after %d attempts",
-            session_id,
-            _UPSTREAM_RECONNECT_MAX_ATTEMPTS,
+
+        async def _run_once() -> None:
+            relay.voice_active = False
+            relay.social_turn_in_flight = False
+            await relay.pump_down(websocket.send_json, websocket.send_bytes)
+
+        await _redial(
+            upstream,
+            _run_once,
+            max_attempts=_UPSTREAM_RECONNECT_MAX_ATTEMPTS,
+            already_connected=True,
+            label=f"upstream for {session_id}",
         )
 
     async def _drain_social() -> None:
