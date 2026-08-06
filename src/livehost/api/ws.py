@@ -21,7 +21,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from livehost.auth import introspect
 from livehost.ingest.tiktok import TikTokLiveIngestor
 from livehost.registry import LivehostSession, livehost_registry
-from livehost.relay import Relay
+from livehost.relay import Relay, _maybe_await
 from livehost.scheduler import EventScheduler
 from livehost.settings import settings
 from livehost.upstream import Upstream
@@ -32,9 +32,56 @@ router = APIRouter(prefix="/v1/livehost", tags=["livehost"])
 
 _SOCIAL_POLL_SECONDS = 0.25
 
+# How many times the *upstream* conversation socket is redialled after a
+# drop, before the down direction gives up. Deliberately unrelated to the
+# ingestor's own TikTokLiveIngestor backoff/offline-poll settings -- these
+# two connections are on separate reconnect budgets by design (see _down()).
+_UPSTREAM_RECONNECT_MAX_ATTEMPTS = 5
+
 
 def _mention_keywords() -> list[str]:
     return [k.strip() for k in settings.mention_keywords.split(",") if k.strip()]
+
+
+def resume_params(params: dict, session_id: str | None) -> dict:
+    """Upstream query params for a reconnect. session_id is what keeps the
+    gateway writing to the same stored session, so history does not fork."""
+    resumed = dict(params)
+    if session_id:
+        resumed["session_id"] = session_id
+    return resumed
+
+
+async def relay_with_reconnect(upstream, send_json, send_bytes, max_attempts: int = 5) -> None:
+    """Relay downstream, redialling the gateway when it drops.
+
+    Standalone and Relay-agnostic on purpose: it knows nothing about
+    voice_active arbitration, the ingestor, or the registry -- it only
+    reconnects `upstream` and forwards whatever it yields. The handler
+    below does not call this directly (see `_down()`'s docstring for why);
+    it exists as the plain, directly-testable shape of the reconnect loop
+    that `_down()` follows.
+
+    The ingestor is deliberately NOT in scope here: a TikTok connection costs
+    backoff and time to rebuild, and an upstream hiccup must not spend it.
+    Social events keep accumulating in the scheduler's bounded queue during the
+    gap and are subject to its existing overflow behaviour.
+    """
+    attempt = 0
+    while attempt < max_attempts:
+        attempt += 1
+        try:
+            await upstream.connect()
+            async for message in upstream.events():
+                if isinstance(message, bytes):
+                    await _maybe_await(send_bytes(message))
+                else:
+                    await _maybe_await(send_json(message))
+            return
+        except (ConnectionError, OSError) as exc:
+            logger.warning("upstream dropped (attempt %d/%d): %s", attempt, max_attempts, exc)
+            await asyncio.sleep(min(2 ** (attempt - 1), 10))
+    logger.error("giving up on the upstream after %d attempts", max_attempts)
 
 
 @router.websocket("/stream")
@@ -80,22 +127,31 @@ async def livehost_stream(websocket: WebSocket) -> None:
         await websocket.close(code=4401, reason="unauthorized")
         return
 
+    # session_id here is the *local* session_id (browser-supplied, or the
+    # uuid generated above when it wasn't) -- not `q.get("session_id")`
+    # directly, so it is always present. That is what lets a reconnect (see
+    # _down()) redial this same Upstream's URL unchanged and still land on
+    # the same gateway-side stored session: resume_params bakes it into the
+    # query once, here, and every subsequent upstream.connect() reuses that
+    # same URL verbatim.
     upstream = Upstream(
         settings.gateway_url,
         ticket,
-        {
-            "session_id": q.get("session_id"),
-            "profile": q.get("profile"),
-            "tts_profile": q.get("tts_profile"),
-            "language": q.get("language"),
-            "stt_model": q.get("stt_model"),
-            "voice": q.get("voice"),
-            "sample_rate": q.get("sample_rate"),
-            "audio_codec": q.get("audio_codec"),
-            "audio_out": q.get("audio_out"),
-            "output_sample_rate": q.get("output_sample_rate"),
-            "output": q.get("output") or "audio,text",
-        },
+        resume_params(
+            {
+                "profile": q.get("profile"),
+                "tts_profile": q.get("tts_profile"),
+                "language": q.get("language"),
+                "stt_model": q.get("stt_model"),
+                "voice": q.get("voice"),
+                "sample_rate": q.get("sample_rate"),
+                "audio_codec": q.get("audio_codec"),
+                "audio_out": q.get("audio_out"),
+                "output_sample_rate": q.get("output_sample_rate"),
+                "output": q.get("output") or "audio,text",
+            },
+            session_id,
+        ),
     )
     try:
         await upstream.connect()
@@ -116,7 +172,49 @@ async def livehost_stream(websocket: WebSocket) -> None:
     relay = Relay(upstream=upstream, scheduler=scheduler)
 
     async def _down() -> None:
-        await relay.pump_down(websocket.send_json, websocket.send_bytes)
+        """Relay upstream to browser, redialling the gateway if the
+        conversation socket drops -- without disturbing the ingestor.
+
+        Wiring choice (Task 10): the reconnect loop wraps `relay.pump_down`
+        from the outside, rather than `pump_down` growing a `reconnect`
+        parameter. That keeps `Relay.pump_down` itself -- and
+        tests/test_relay.py, which calls it directly and unpatched -- exactly
+        as Task 8 left it. Every attempt below re-enters `pump_down`, so its
+        per-message arbitration (`voice_active`, barge-in abort) keeps
+        running across a reconnect the same as it does within one unbroken
+        connection.
+
+        `upstream` is the only thing redialled, and only `upstream.connect()`
+        is called -- the session_id already baked into its URL (see
+        `resume_params` above) is unchanged by a reconnect, so the gateway
+        resumes the same stored session instead of forking history. The
+        ingestor never appears in this function, on purpose: it is a
+        separate, far more expensive connection (its own backoff, its own
+        offline polling), and an upstream hiccup here must not cost it --
+        nothing below stops, restarts, or otherwise reaches `ingestor`.
+        """
+        attempt = 0
+        while attempt < _UPSTREAM_RECONNECT_MAX_ATTEMPTS:
+            attempt += 1
+            try:
+                if attempt > 1:
+                    await upstream.connect()
+                await relay.pump_down(websocket.send_json, websocket.send_bytes)
+                return
+            except (ConnectionError, OSError) as exc:
+                logger.warning(
+                    "upstream dropped for %s (attempt %d/%d): %s",
+                    session_id,
+                    attempt,
+                    _UPSTREAM_RECONNECT_MAX_ATTEMPTS,
+                    exc,
+                )
+                await asyncio.sleep(min(2 ** (attempt - 1), 10))
+        logger.error(
+            "giving up on the upstream for %s after %d attempts",
+            session_id,
+            _UPSTREAM_RECONNECT_MAX_ATTEMPTS,
+        )
 
     async def _drain_social() -> None:
         while True:
