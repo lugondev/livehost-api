@@ -103,8 +103,12 @@ async def livehost_stream(websocket: WebSocket) -> None:
         logger.warning("upstream connect failed for %s: %s", session_id, exc)
         # The claim above already holds the slot -- a connect failure here
         # must release it, or it leaks exactly the entry Finding 2 (teardown
-        # leak) was about, just via a different path.
-        livehost_registry.unregister(session_id)
+        # leak) was about, just via a different path. release(), not a
+        # delete-by-id: a racing reconnect could have already replaced this
+        # entry with its own (claim() allows a same-owner reclaim), and
+        # deleting by id alone would evict that newer, still-live session
+        # instead of the failed one this connection actually owns.
+        livehost_registry.release(session_id, session)
         await websocket.send_json({"event": "error", "message": "gateway unavailable"})
         await websocket.close()
         return
@@ -145,11 +149,11 @@ async def livehost_stream(websocket: WebSocket) -> None:
                 await task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001 - teardown must not raise
                 pass
-        # Each step below is independently guarded, and unregister is
+        # Each step below is independently guarded, and the release is
         # unconditional: a raise from ingestor.stop() or upstream.close()
         # (e.g. Upstream.close()'s unguarded `await self._ws.close()` on a
         # broken transport) must not skip the others, and must never leave
-        # this session_id in the registry -- a leaked entry there is a
+        # this session_id claimed forever -- a leaked entry there is a
         # session whose ingestor/upstream are gone but whose control routes
         # (/status, /connect, /disconnect) keep resolving to it.
         try:
@@ -160,7 +164,13 @@ async def livehost_stream(websocket: WebSocket) -> None:
             await upstream.close()
         except Exception as exc:  # noqa: BLE001 - teardown must not raise
             logger.warning("upstream.close() failed for %s: %s", session_id, exc)
-        livehost_registry.unregister(session_id)
+        # release(), not delete-by-id: if the same owner reconnected under
+        # this session_id while this connection was winding down, claim()
+        # already replaced the registry entry with the new connection's
+        # session. Deleting by id here would evict that newer, live entry
+        # instead of this (superseded) connection's own -- compare-and-
+        # delete only removes it if this is still the entry on file.
+        livehost_registry.release(session_id, session)
 
 
 def _default_tiktok_client_factory(unique_id: str):

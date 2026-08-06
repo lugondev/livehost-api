@@ -64,8 +64,32 @@ class LivehostSessionRegistry:
     def get(self, session_id: str) -> LivehostSession | None:
         return self._sessions.get(session_id)
 
-    def unregister(self, session_id: str) -> None:
-        self._sessions.pop(session_id, None)
+    def release(self, session_id: str, session: LivehostSession) -> bool:
+        """Remove `session_id` only if it still holds exactly `session`.
+
+        Compare-and-delete, not delete-by-id. A same-owner reclaim (see
+        claim()) replaces the stored session while the superseded
+        connection is still winding down: that older connection's own
+        teardown must not evict the newer, live entry, which a delete-by-id
+        (the old `unregister()`, now removed) would do -- it removes
+        whatever is stored under the id *now*, not what *this caller* put
+        there. That is an ABA bug, and the exact same failure shape as the
+        teardown leak `release()`'s callers exist to avoid, re-entering
+        through the one path `claim()` deliberately still allows to
+        overwrite: a legitimate same-owner reconnect.
+
+        Uses `is`, not `==`: identity of the session object, not equality of
+        its fields. Two sessions for the same owner compare equal on
+        user_id, and that is exactly the case this must still tell apart.
+
+        Like claim(), atomic by containing no await.
+
+        Returns True if this caller's entry was the one removed.
+        """
+        if self._sessions.get(session_id) is session:
+            del self._sessions[session_id]
+            return True
+        return False
 
 
 livehost_registry = LivehostSessionRegistry()

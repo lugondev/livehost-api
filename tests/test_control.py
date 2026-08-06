@@ -23,17 +23,15 @@ class _Scheduler:
 
 @pytest.fixture
 def owned(monkeypatch):
-    livehost_registry.register(
-        "sess-1",
-        LivehostSession(scheduler=_Scheduler(), ingestor=_Ingestor(), user_id="user-1"),
-    )
+    session = LivehostSession(scheduler=_Scheduler(), ingestor=_Ingestor(), user_id="user-1")
+    livehost_registry.register("sess-1", session)
 
     async def _introspect(ticket, client=None):
         return {"tkt-owner": "user-1", "tkt-other": "user-2"}.get(ticket)
 
     monkeypatch.setattr("livehost.api.control.introspect", _introspect)
     yield
-    livehost_registry.unregister("sess-1")
+    livehost_registry.release("sess-1", session)
 
 
 def _get(client, ticket):

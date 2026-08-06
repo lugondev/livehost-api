@@ -1,16 +1,21 @@
-"""Direct tests of LivehostSessionRegistry.claim() -- the atomic check-and-set
-that closes the session_id race ws.py's own check-then-register used to
-leave open across `await upstream.connect()`.
+"""Direct tests of LivehostSessionRegistry.claim() and .release() -- the
+atomic check-and-set/compare-and-delete pair that replaced the old
+get()-then-register()/unregister() calls, which left two races open: a
+TOCTOU window across `await upstream.connect()` (closed by claim()), and an
+ABA bug where a superseded connection's teardown could delete-by-id a live
+session a same-owner reclaim had already replaced it with (closed by
+release()).
 
 These are deliberately unit-level rather than driven through the WebSocket
-route: the race claim() closes is a same-event-loop TOCTOU window a few
-microseconds wide, and there is no reliable way to force two real WS
-connections to straddle it without either instrumenting production code for
-test-only synchronization or accepting a flaky test (see the arbitration
-test in test_ws_social.py for what that costs). A direct test of the atomic
-primitive proves the invariant `claim()` is supposed to hold; test_ws_social.py's
+route: both races are same-event-loop windows a few microseconds wide (or,
+for release()'s ABA case, no timing window at all -- just the wrong
+comparison), and there is no reliable way to force real WS connections to
+reproduce them without either instrumenting production code for test-only
+synchronization or accepting a flaky test (see the arbitration test in
+test_ws_social.py for what that costs). Direct tests of the atomic
+primitives prove the invariants they're supposed to hold; test_ws_social.py's
 `test_a_different_identity_cannot_hijack_an_existing_session_id` still covers
-the post-registration case end to end through the real route.
+the post-registration hijack case end to end through the real route.
 """
 
 from livehost.registry import LivehostSession, LivehostSessionRegistry
@@ -61,6 +66,33 @@ def test_a_reclaim_by_the_same_owner_succeeds():
     assert registry.claim("s1", first) is True
     assert registry.claim("s1", second) is True
     assert registry.get("s1") is second
+
+
+def test_a_superseded_reclaim_does_not_evict_the_new_session():
+    """ABA bug reproduction: the owner reconnects under the same session_id
+    (claim() correctly lets the same owner replace their own entry -- see
+    test_a_reclaim_by_the_same_owner_succeeds), then the *superseded*
+    connection's own teardown runs and tries to release what it thinks is
+    still its entry. release() must refuse -- it removes what THIS caller
+    put there, not whatever is stored under the id right now -- or a live,
+    working session (B) ends up with no registry entry at all, and /status,
+    /connect, /disconnect on it all start 404ing.
+    """
+    registry = LivehostSessionRegistry()
+    session_a = _session("user-1")
+    session_b = _session("user-1")  # same owner reconnecting
+
+    assert registry.claim("s1", session_a) is True
+    assert registry.claim("s1", session_b) is True  # legitimate reclaim; registry now holds B
+
+    # A's teardown, still winding down from before B connected, releases
+    # its own (stale) reference -- must be a no-op against the live entry.
+    assert registry.release("s1", session_a) is False
+    assert registry.get("s1") is session_b
+
+    # B's own teardown still works normally.
+    assert registry.release("s1", session_b) is True
+    assert registry.get("s1") is None
 
 
 def test_two_anonymous_callers_can_both_claim_the_same_id():
