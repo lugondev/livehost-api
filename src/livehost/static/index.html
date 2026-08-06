@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TikTok Co-host</title>
+    <style>
+      :root { color-scheme: dark light; }
+      body {
+        margin: 0; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0f1115; color: #e6e6e6;
+      }
+      .card { max-width: 640px; margin: 0 auto; background: #171a21; border: 1px solid #2a2e38; border-radius: 12px; padding: 1.5rem; }
+      h2 { margin-top: 0; }
+      .hint { color: #9aa0ab; font-size: 0.9rem; }
+      .row { display: flex; gap: 1rem; flex-wrap: wrap; margin: 0.75rem 0; }
+      label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; flex: 1; min-width: 160px; }
+      label.check { flex-direction: row; align-items: center; gap: 0.4rem; }
+      input, select, textarea { background: #0f1115; color: inherit; border: 1px solid #2a2e38; border-radius: 6px; padding: 0.4rem 0.5rem; }
+      .actions { display: flex; align-items: center; gap: 0.6rem; margin: 0.75rem 0; }
+      .actions.end { margin-left: auto; }
+      button { background: #3d7bfd; color: #fff; border: none; border-radius: 6px; padding: 0.5rem 0.9rem; cursor: pointer; }
+      button.ghost { background: transparent; border: 1px solid #2a2e38; color: inherit; }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .status-idle { color: #9aa0ab; }
+      .status-rec { color: #33d17a; }
+      .status-error { color: #e5534b; }
+      .meta.error { color: #e5534b; }
+      .hidden { display: none; }
+      .dialogue { min-height: 160px; max-height: 320px; overflow-y: auto; border: 1px solid #2a2e38; border-radius: 8px; padding: 0.75rem; margin: 0.75rem 0; display: flex; flex-direction: column; gap: 0.4rem; }
+      .bubble { padding: 0.4rem 0.6rem; border-radius: 8px; max-width: 90%; }
+      .bubble.user { align-self: flex-end; background: #2a2e38; }
+      .bubble.assistant { align-self: flex-start; background: #16324a; }
+      .bubble.social { align-self: center; font-size: 0.85rem; color: #9aa0ab; }
+      .output.small { max-height: 140px; overflow-y: auto; font-size: 0.8rem; color: #9aa0ab; white-space: pre-wrap; }
+      .player { width: 100%; }
+    </style>
+  </head>
+  <body>
+    <!-- Task 9: the plugin serves this page at its own /ui. It is opened
+         cross-origin from the gateway's UI, which is expected to pass the
+         gateway's own origin and the user's bearer on the URL:
+         <plugin url>/ui?gateway=<gateway origin>&token=<user's gateway bearer> -->
+    <section class="card" id="section-livehost">
+      <div class="card-head">
+        <h2>TikTok Co-host</h2>
+      </div>
+      <p class="hint">AI co-host for TikTok Live: answers viewer comments/gifts by voice and handles your own spoken input, same as Voice&#8594;Voice chat.</p>
+
+      <div class="row">
+        <label class="check">
+          <input type="radio" name="lh-mode" id="lh-mode-cohost" value="cohost" checked /> Co-host (with your mic)
+        </label>
+        <label class="check">
+          <input type="radio" name="lh-mode" id="lh-mode-solo" value="solo" /> Solo host (chat only, no mic)
+        </label>
+      </div>
+      <div class="row">
+        <label>
+          LLM Profile
+          <select id="lh-profile">
+            <option value="">(none — server defaults)</option>
+          </select>
+        </label>
+        <label>
+          TTS Profile
+          <select id="lh-tts-profile">
+            <option value="">(server default)</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <label>
+          Language (STT hint)
+          <input id="lh-language" type="text" value="vi" placeholder="vi, en, ja&#8230; (vi recommended)" />
+        </label>
+        <label class="check" title="Receive reply audio as streamed Opus frames decoded in-browser instead of fetching WAV files.">
+          <input type="checkbox" id="lh-opus" /> Opus downlink (low bandwidth)
+        </label>
+      </div>
+      <div class="actions">
+        <button id="lh-session-start">Start Session</button>
+        <button id="lh-session-stop" class="ghost" disabled>Stop Session</button>
+        <span id="lh-status" class="status-idle">idle</span>
+      </div>
+
+      <div class="row" style="margin-top:1rem">
+        <label>
+          TikTok username
+          <input id="lh-tiktok-username" type="text" placeholder="unique_id (e.g. therock)" disabled />
+        </label>
+        <div class="actions end">
+          <button id="lh-tiktok-connect" disabled>Connect</button>
+          <button id="lh-tiktok-disconnect" class="ghost" disabled>Disconnect</button>
+        </div>
+      </div>
+      <p class="hint">TikTok: <span id="lh-tiktok-status" class="status-idle">idle</span></p>
+      <p id="lh-tiktok-error" class="meta error hidden"></p>
+
+      <div id="lh-dialogue" class="dialogue"></div>
+      <audio id="lh-audio" class="player hidden" controls></audio>
+      <pre id="lh-log" class="output small"></pre>
+    </section>
+
+    <script type="module">
+      import { loadLivehostEngines, resetLhManualOverrides } from "./livehost.js";
+      import { el, restoreAndBind } from "./helpers.js";
+
+      // Same bootstrap convention livehost.js uses for its own gateway calls
+      // (see Task 9 brief step 6, change 2): the profile/TTS-profile dropdown
+      // feeds are gateway data, so they go through the same absolute
+      // origin + bearer treatment, just for the two GET calls this page
+      // itself is responsible for populating.
+      const params = new URLSearchParams(location.search);
+      const gatewayOrigin = (params.get("gateway") || "").replace(/\/$/, "");
+      const gatewayToken = params.get("token") || "";
+
+      async function gatewayFetch(path) {
+        return fetch(`${gatewayOrigin}${path}`, {
+          headers: { Authorization: `Bearer ${gatewayToken}` },
+        });
+      }
+
+      // `data` on both endpoints is an object keyed by profile name (see
+      // the gateway's own static/js/profiles.js loadProfiles() and
+      // tts-profiles.js loadTtsProfiles()), not a list -- and the real TTS
+      // route is `/v1/tts/profiles`, not `/v1/tts_profiles` as a first pass
+      // at this page assumed before checking the gateway source.
+      async function populateProfileDropdown(selectId, path, restoreId) {
+        const sel = el(selectId);
+        if (!sel) return;
+        try {
+          const body = await (await gatewayFetch(path)).json();
+          Object.keys(body.data || {}).sort().forEach((name) => {
+            const opt = document.createElement("option");
+            opt.value = name;
+            opt.textContent = name;
+            sel.appendChild(opt);
+          });
+          restoreAndBind(restoreId);
+        } catch {
+          /* dropdown just stays at its server-default placeholder */
+        }
+      }
+
+      populateProfileDropdown("lh-profile", "/v1/profiles", "lh-profile");
+      populateProfileDropdown("lh-tts-profile", "/v1/tts/profiles", "lh-tts-profile");
+      if (el("lh-profile")) el("lh-profile").addEventListener("change", () => resetLhManualOverrides());
+
+      loadLivehostEngines();
+    </script>
+  </body>
+</html>
