@@ -49,6 +49,26 @@ async def livehost_stream(websocket: WebSocket) -> None:
     q = websocket.query_params
     session_id = q.get("session_id") or str(uuid.uuid4())
 
+    # H5, ported: a caller-supplied session_id must not silently overwrite
+    # another user's live session. livehost_registry.register() below has no
+    # such guard -- it overwrites unconditionally on collision -- so without
+    # this check, opening a WS with someone else's active ?session_id=
+    # hijacks it: their connection replaces the live entry, the original
+    # owner's control calls start resolving to the attacker's session, and
+    # when this connection eventually disconnects, unregister() orphans the
+    # original owner's ingestor (a TikTok connection left running with
+    # nothing left to feed). Same normalization used when storing
+    # LivehostSession.user_id below (`user_id or None`), so an
+    # "authenticated, no owner" caller compares correctly against an
+    # already-ownerless session.
+    existing = livehost_registry.get(session_id)
+    if existing is not None and existing.user_id != (user_id or None):
+        await websocket.send_json(
+            {"event": "error", "message": f"Session '{session_id}' not found"}
+        )
+        await websocket.close(code=4401, reason="unauthorized")
+        return
+
     upstream = Upstream(
         settings.gateway_url,
         ticket,
@@ -129,8 +149,21 @@ async def livehost_stream(websocket: WebSocket) -> None:
                 await task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001 - teardown must not raise
                 pass
-        await ingestor.stop()
-        await upstream.close()
+        # Each step below is independently guarded, and unregister is
+        # unconditional: a raise from ingestor.stop() or upstream.close()
+        # (e.g. Upstream.close()'s unguarded `await self._ws.close()` on a
+        # broken transport) must not skip the others, and must never leave
+        # this session_id in the registry -- a leaked entry there is a
+        # session whose ingestor/upstream are gone but whose control routes
+        # (/status, /connect, /disconnect) keep resolving to it.
+        try:
+            await ingestor.stop()
+        except Exception as exc:  # noqa: BLE001 - teardown must not raise
+            logger.warning("ingestor.stop() failed for %s: %s", session_id, exc)
+        try:
+            await upstream.close()
+        except Exception as exc:  # noqa: BLE001 - teardown must not raise
+            logger.warning("upstream.close() failed for %s: %s", session_id, exc)
         livehost_registry.unregister(session_id)
 
 

@@ -321,7 +321,11 @@ export async function startLhSession() {
     return;
   }
   const pluginUrl = ticketBody?.data?.url;
-  const ticket = ticketBody?.data?.ticket;
+  // The gateway's /v1/plugins/ticket response (Task 4 of this plan) names
+  // this field `token`, not `ticket` -- confirmed against
+  // .superpowers/sdd/2026-08-05-gateway-plugin-contract/task-4-brief.md's
+  // own test: `{"success": true, "data": {"url", "token", "expires_in"}}`.
+  const ticket = ticketBody?.data?.token;
   if (!pluginUrl || !ticket) {
     setLhStatus("plugin ticket unavailable", "status-error");
     setLhSessionUI("idle");

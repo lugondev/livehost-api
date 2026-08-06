@@ -86,6 +86,62 @@ def test_browser_audio_reaches_the_gateway(gateway, authed):
     assert b"MIC" in gateway["audio"]
 
 
+def test_a_different_identity_cannot_hijack_an_existing_session_id(gateway, monkeypatch):
+    """H5, ported: livehost_registry.register() overwrites unconditionally on
+    a session_id collision, and session_id is caller-supplied. Without a
+    guard, a second connection presenting someone else's ?session_id= would
+    silently replace the live entry -- the original owner's control calls
+    would start resolving to the intruder's session, and when the intruder
+    disconnects, unregister() would orphan the original owner's ingestor.
+
+    This would fail if the guard in livehost_stream (the `existing is not
+    None and existing.user_id != (user_id or None)` check) were removed:
+    the second connect would then succeed, `receive_json()` on it would get
+    `session_started` instead of the expected error, and the registry
+    identity check below would find the entry had been overwritten to
+    user-2.
+    """
+
+    async def _introspect(ticket, client=None):
+        return {"good": "user-1", "intruder": "user-2"}.get(ticket)
+
+    monkeypatch.setattr("livehost.api.ws.introspect", _introspect)
+
+    from livehost.app import app
+    from livehost.registry import livehost_registry
+
+    session_id = "hijack-1"
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            f"/v1/livehost/stream?ticket=good&session_id={session_id}"
+        ) as ws1:
+            started = ws1.receive_json()
+            assert started["event"] == "session_started"
+
+            original = livehost_registry.get(session_id)
+            assert original is not None
+            assert original.user_id == "user-1"
+
+            # A different, validly-authenticated identity tries to take over
+            # the same session_id.
+            with client.websocket_connect(
+                f"/v1/livehost/stream?ticket=intruder&session_id={session_id}"
+            ) as ws2:
+                refusal = ws2.receive_json()
+                assert refusal == {
+                    "event": "error",
+                    "message": f"Session '{session_id}' not found",
+                }
+                with pytest.raises(Exception):
+                    ws2.receive_json()
+
+            # The original owner's registry entry must be untouched -- same
+            # object, same owner, not silently replaced by the intruder's.
+            still_there = livehost_registry.get(session_id)
+            assert still_there is original
+            assert still_there.user_id == "user-1"
+
+
 def test_social_turn_does_not_fire_while_the_streamer_is_mid_turn(gateway, authed, monkeypatch):
     """Arbitration under barge-in, driven end to end through the real WS
     route (not the FakeUpstream unit tests in test_relay.py -- this is about
