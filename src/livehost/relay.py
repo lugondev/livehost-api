@@ -8,13 +8,10 @@ the upstream event stream instead -- speech_start sets it, turn_done clears it.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Awaitable, Callable
 
 from livehost.orchestrator import LiveHostOrchestrator
 from livehost.scheduler import EventScheduler
-
-logger = logging.getLogger(__name__)
 
 
 class Relay:

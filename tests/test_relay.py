@@ -56,6 +56,18 @@ async def test_turn_done_clears_it():
     assert relay.voice_active is False
 
 
+async def test_aborted_clears_it_too():
+    """A browser-initiated abort must clear the flags the same way turn_done
+    does. If it does not, voice_active stays True forever, poll_social never
+    fires again, and the co-host goes silent for the rest of the session --
+    with nothing raised and nothing logged."""
+    upstream = FakeUpstream([{"event": "speech_start"}, {"event": "aborted", "reason": "user"}])
+    relay = _relay(upstream)
+    await relay.pump_down(lambda e: None, lambda b: None)
+    assert relay.voice_active is False
+    assert relay.social_turn_in_flight is False
+
+
 async def test_events_and_audio_are_relayed_verbatim():
     """The browser protocol is unchanged by the port: the gateway's
     session_started is a superset of what livehost used to send, so it passes
@@ -111,3 +123,4 @@ async def test_barge_in_aborts_the_social_turn():
     relay.social_turn_in_flight = True
     await relay.pump_down(lambda e: None, lambda b: None)
     assert upstream.aborted == 1
+    assert relay.social_turn_in_flight is False
