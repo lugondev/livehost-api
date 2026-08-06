@@ -49,20 +49,31 @@ async def livehost_stream(websocket: WebSocket) -> None:
     q = websocket.query_params
     session_id = q.get("session_id") or str(uuid.uuid4())
 
+    scheduler = EventScheduler(
+        mention_keywords=_mention_keywords(),
+        individual_threshold=settings.individual_threshold,
+        batch_top_k=settings.batch_top_k,
+        max_queue_size=settings.queue_max_size,
+    )
+    raw_social_queue: asyncio.Queue = asyncio.Queue()
+    ingestor = TikTokLiveIngestor(
+        client_factory=_default_tiktok_client_factory,
+        queue=raw_social_queue,
+        backoff_initial=settings.backoff_initial_seconds,
+        backoff_max=settings.backoff_max_seconds,
+        offline_poll_interval=settings.offline_poll_interval_seconds,
+        watchdog_idle_seconds=settings.watchdog_idle_seconds,
+    )
+
     # H5, ported: a caller-supplied session_id must not silently overwrite
-    # another user's live session. livehost_registry.register() below has no
-    # such guard -- it overwrites unconditionally on collision -- so without
-    # this check, opening a WS with someone else's active ?session_id=
-    # hijacks it: their connection replaces the live entry, the original
-    # owner's control calls start resolving to the attacker's session, and
-    # when this connection eventually disconnects, unregister() orphans the
-    # original owner's ingestor (a TikTok connection left running with
-    # nothing left to feed). Same normalization used when storing
-    # LivehostSession.user_id below (`user_id or None`), so an
-    # "authenticated, no owner" caller compares correctly against an
-    # already-ownerless session.
-    existing = livehost_registry.get(session_id)
-    if existing is not None and existing.user_id != (user_id or None):
+    # another user's live session. Claimed here -- before the only `await` in
+    # this function that runs before registration (`upstream.connect()`
+    # below) -- rather than checked-then-registered around that await: two
+    # connections racing the same session_id must not both observe "not
+    # held" and both pass. `claim()` is atomic (no await in it) precisely so
+    # this ordering closes that window instead of just narrowing it.
+    session = LivehostSession(scheduler=scheduler, ingestor=ingestor, user_id=user_id or None)
+    if not livehost_registry.claim(session_id, session):
         await websocket.send_json(
             {"event": "error", "message": f"Session '{session_id}' not found"}
         )
@@ -90,29 +101,14 @@ async def livehost_stream(websocket: WebSocket) -> None:
         await upstream.connect()
     except Exception as exc:  # noqa: BLE001 - report upstream failure on the wire
         logger.warning("upstream connect failed for %s: %s", session_id, exc)
+        # The claim above already holds the slot -- a connect failure here
+        # must release it, or it leaks exactly the entry Finding 2 (teardown
+        # leak) was about, just via a different path.
+        livehost_registry.unregister(session_id)
         await websocket.send_json({"event": "error", "message": "gateway unavailable"})
         await websocket.close()
         return
 
-    scheduler = EventScheduler(
-        mention_keywords=_mention_keywords(),
-        individual_threshold=settings.individual_threshold,
-        batch_top_k=settings.batch_top_k,
-        max_queue_size=settings.queue_max_size,
-    )
-    raw_social_queue: asyncio.Queue = asyncio.Queue()
-    ingestor = TikTokLiveIngestor(
-        client_factory=_default_tiktok_client_factory,
-        queue=raw_social_queue,
-        backoff_initial=settings.backoff_initial_seconds,
-        backoff_max=settings.backoff_max_seconds,
-        offline_poll_interval=settings.offline_poll_interval_seconds,
-        watchdog_idle_seconds=settings.watchdog_idle_seconds,
-    )
-    livehost_registry.register(
-        session_id,
-        LivehostSession(scheduler=scheduler, ingestor=ingestor, user_id=user_id or None),
-    )
     relay = Relay(upstream=upstream, scheduler=scheduler)
 
     async def _down() -> None:
