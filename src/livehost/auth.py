@@ -39,13 +39,18 @@ async def introspect(ticket: str, client: httpx.AsyncClient | None = None) -> st
         if response.status_code != 200:
             logger.warning("introspect rejected: HTTP %s", response.status_code)
             return None
-        data = response.json().get("data") or {}
-        if not data.get("active"):
+        body = response.json()
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, dict) or not data.get("active"):
             return None
         user_id = data.get("user_id")
         return user_id if isinstance(user_id, str) else None
-    except httpx.HTTPError as exc:
-        logger.warning("introspect unreachable: %s", exc)
+    except (httpx.HTTPError, ValueError) as exc:
+        # ValueError covers json.JSONDecodeError. A gateway answering 200 with
+        # a body we cannot parse is a hiccup like any other, and the contract
+        # here is that a hiccup costs one browser socket -- never an exception
+        # raised into the handler that owns the TikTok connection.
+        logger.warning("introspect failed: %s", exc)
         return None
     finally:
         if owned:

@@ -71,3 +71,36 @@ async def test_an_unauthenticated_gateway_caller_yields_an_empty_user_id():
 
     async with _client(handler) as c:
         assert await introspect("tkt", client=c) == ""
+
+
+async def test_a_200_with_non_json_body_returns_none_rather_than_raising():
+    """The gateway might hiccup and return a 200 with garbage. That must close
+    one browser socket, not crash the handler and take the TikTok connection down."""
+
+    def handler(request):
+        return httpx.Response(200, content=b"not json")
+
+    async with _client(handler) as c:
+        assert await introspect("tkt", client=c) is None
+
+
+async def test_a_200_with_data_not_a_dict_returns_none_rather_than_raising():
+    """If the gateway returns data as a string instead of a dict, that is a
+    protocol violation, not a ticket issue. Must return None, never raise."""
+
+    def handler(request):
+        return httpx.Response(200, json={"success": True, "data": "oops"})
+
+    async with _client(handler) as c:
+        assert await introspect("tkt", client=c) is None
+
+
+async def test_a_200_with_missing_data_returns_none_rather_than_raising():
+    """If the gateway returns no data key at all, we cannot determine if the
+    ticket is active. Must return None, never raise."""
+
+    def handler(request):
+        return httpx.Response(200, json={"success": True})
+
+    async with _client(handler) as c:
+        assert await introspect("tkt", client=c) is None
