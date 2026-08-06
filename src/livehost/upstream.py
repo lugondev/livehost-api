@@ -34,7 +34,7 @@ class Upstream:
 
     def __init__(self, base: str, token: str, params: dict[str, str | None]) -> None:
         self._url = build_upstream_url(base, token, params)
-        self._ws: websockets.WebSocketClientProtocol | None = None
+        self._ws: websockets.ClientConnection | None = None
 
     async def connect(self) -> None:
         self._ws = await websockets.connect(self._url, max_size=None)

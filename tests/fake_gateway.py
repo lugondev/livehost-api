@@ -7,11 +7,13 @@ own socket still satisfies the same script.
 
 Control messages in : {"type": "text"|"abort"|"reset"|"new_session"|"flush"|"end"}
 Audio frames in     : binary
-Events out          : {"event": ..., ...}
+Events out          : session_started, speech_start, speech_end, processing,
+                       user_transcript, response_text, audio_start, audio_end,
+                       turn_done, aborted, command, engines_ready, error,
+                       reset, warning, done
 Audio out           : binary
 """
 
-import asyncio
 import json
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -50,6 +52,22 @@ def build_fake_gateway() -> tuple[FastAPI, dict]:
                     break
                 if message.get("bytes") is not None:
                     log["audio"].append(message["bytes"])
+                    # The real socket answers audio with the endpointer's
+                    # verdict, then a turn. Livehost's arbitration reads
+                    # exactly these two events -- speech_start sets
+                    # voice_active, turn_done clears it -- so a fake that
+                    # stays silent here specifies away the primary path.
+                    await websocket.send_json({"event": "speech_start"})
+                    await websocket.send_json({"event": "speech_end"})
+                    await websocket.send_json(
+                        {
+                            "event": "user_transcript",
+                            "turn": 1,
+                            "text": "hello",
+                            "engine": "fake-stt",
+                        }
+                    )
+                    await websocket.send_json({"event": "turn_done", "turn": 1})
                     continue
                 if message.get("text") is not None:
                     control = json.loads(message["text"])
@@ -73,9 +91,3 @@ def build_fake_gateway() -> tuple[FastAPI, dict]:
             pass
 
     return app, log
-
-
-async def speech_start(websocket: WebSocket) -> None:
-    """Helper for tests that need the streamer to start talking."""
-    await websocket.send_json({"event": "speech_start"})
-    await asyncio.sleep(0)
