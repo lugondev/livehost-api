@@ -293,10 +293,29 @@ export async function startLhSession() {
   const ttsProfile = el("lh-tts-profile")?.value;
   if (ttsProfile) params += `&tts_profile=${encodeURIComponent(ttsProfile)}`;
   if (el("lh-language").value.trim()) params += `&language=${encodeURIComponent(el("lh-language").value.trim())}`;
-  const persona = el("lh-persona")?.value.trim() || DEFAULT_LIVEHOST_PERSONA;
+  // Precedence: an explicitly typed persona always wins. Otherwise, a
+  // selected profile with its own system_prompt behaves like the regular
+  // chat UI -- that profile's persona is used, NOT the built-in TikTok-host
+  // default -- since choosing a profile is itself an explicit choice of
+  // "use this persona." Only when neither is set (no profile, or a profile
+  // with no system_prompt of its own, e.g. "server defaults") does the
+  // built-in default apply.
+  const typedPersona = el("lh-persona")?.value.trim();
+  const profileSystemPrompt = el("lh-profile")?.selectedOptions?.[0]?.dataset.systemPrompt || "";
+  const basePersona = typedPersona || (profile ? profileSystemPrompt : DEFAULT_LIVEHOST_PERSONA);
   const toneDirective = TONE_DIRECTIVES[el("lh-tone")?.value || ""] || "";
-  const finalPersona = toneDirective ? `${persona}\n\n${toneDirective}` : persona;
-  params += `&system_prompt=${encodeURIComponent(finalPersona)}`;
+  const finalPersona = toneDirective
+    ? basePersona
+      ? `${basePersona}\n\n${toneDirective}`
+      : toneDirective
+    : basePersona;
+  // Omitted entirely (not sent as ""), not just skipped, when there is
+  // nothing to override with: a profile picked with no system_prompt of its
+  // own (e.g. "host") must fall through to the gateway's own profile/
+  // server-default resolution -- same as the regular chat UI -- not have an
+  // empty override silently blank its persona out (see
+  // SessionRuntimeConfig.persona_override's "falsy means unset" contract).
+  if (finalPersona) params += `&system_prompt=${encodeURIComponent(finalPersona)}`;
 
   lh.opusMode = !!el("lh-opus")?.checked && lhOpusSupported();
   if (el("lh-opus")?.checked && !lh.opusMode) {

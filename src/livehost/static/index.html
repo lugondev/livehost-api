@@ -152,6 +152,12 @@
             const opt = document.createElement("option");
             opt.value = name;
             opt.textContent = name;
+            // Only present on /v1/profiles entries (not /v1/tts/profiles) --
+            // read by livehost.js at connect time so picking a profile with
+            // its own system_prompt behaves like the regular chat UI
+            // (profile's own persona wins) instead of always falling back
+            // to the built-in TikTok-host default.
+            if (body.data[name].system_prompt) opt.dataset.systemPrompt = body.data[name].system_prompt;
             sel.appendChild(opt);
           });
           restoreAndBind(restoreId);
