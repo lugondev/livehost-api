@@ -79,6 +79,17 @@
         </label>
       </div>
       <div class="row">
+        <label>
+          Tông giọng (Style)
+          <select id="lh-tone">
+            <option value="">Mặc định</option>
+            <option value="serious">Nghiêm túc</option>
+            <option value="cheerful">Vui vẻ</option>
+            <option value="playful">Cợt nhả</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
         <label style="flex-basis: 100%">
           Persona (leave blank to use the built-in TikTok-host persona — reacts to comments/gifts by name, no AI disclaimers, no hedging)
           <textarea id="lh-persona" rows="3" placeholder="e.g. Bạn là Lan, chủ kênh live bán mỹ phẩm. Xưng &quot;chị&quot;, gọi viewer là &quot;các bạn&quot;..."></textarea>
@@ -153,6 +164,7 @@
       populateProfileDropdown("lh-tts-profile", "/v1/tts/profiles", "lh-tts-profile");
       if (el("lh-profile")) el("lh-profile").addEventListener("change", () => resetLhManualOverrides());
       restoreAndBind("lh-persona");
+      restoreAndBind("lh-tone");
 
       loadLivehostEngines();
     </script>

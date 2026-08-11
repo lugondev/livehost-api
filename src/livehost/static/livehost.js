@@ -49,6 +49,16 @@ Các dòng bắt đầu bằng "[TikTok @tên]: nội dung" là bình luận th�
 
 Nói thẳng, dứt khoát — tránh rào đón kiểu "có vẻ như", "có lẽ", "hình như", "mình nghĩ có thể". Nếu không chắc một thông tin, hãy nói rõ là không chắc, đừng vòng vo.`;
 
+// Appended after whichever persona text is in play (default or custom) --
+// a tone is a delivery-style knob independent of who the AI is playing, so
+// it must not force the user to rewrite their whole persona just to change
+// how energetic/serious it sounds.
+const TONE_DIRECTIVES = {
+  serious: `Tông giọng: nghiêm túc, điềm tĩnh, chuyên nghiệp. Đi thẳng vào nội dung, hạn chế đùa giỡn hay pha trò, không dùng ngôn ngữ quá suồng sã.`,
+  cheerful: `Tông giọng: vui vẻ, năng lượng cao, hào hứng. Dùng câu cảm thán tự nhiên, phản ứng nhiệt tình với comment/gift/follow, giữ không khí sôi động.`,
+  playful: `Tông giọng: cợt nhả, trêu chọc viewer một cách duyên dáng và thân thiện, hay đùa giỡn, thoải mái, không nghiêm trọng hoá vấn đề gì -- nhưng vẫn tôn trọng, không xúc phạm ai.`,
+};
+
 const lhDetails = { stt: {}, sttAvailable: true };
 
 // Called when the active LLM profile changes: manual STT/TTS overrides must
@@ -284,7 +294,9 @@ export async function startLhSession() {
   if (ttsProfile) params += `&tts_profile=${encodeURIComponent(ttsProfile)}`;
   if (el("lh-language").value.trim()) params += `&language=${encodeURIComponent(el("lh-language").value.trim())}`;
   const persona = el("lh-persona")?.value.trim() || DEFAULT_LIVEHOST_PERSONA;
-  params += `&system_prompt=${encodeURIComponent(persona)}`;
+  const toneDirective = TONE_DIRECTIVES[el("lh-tone")?.value || ""] || "";
+  const finalPersona = toneDirective ? `${persona}\n\n${toneDirective}` : persona;
+  params += `&system_prompt=${encodeURIComponent(finalPersona)}`;
 
   lh.opusMode = !!el("lh-opus")?.checked && lhOpusSupported();
   if (el("lh-opus")?.checked && !lh.opusMode) {
