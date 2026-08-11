@@ -302,32 +302,27 @@ export async function startLhSession() {
   }
 
   // Change 1 of 3: the WS URL is no longer a same-origin path -- this page
-  // is served by the plugin, not the gateway, so it has to trade the user's
-  // gateway bearer for a plugin ticket first, then build the plugin's own
-  // WS URL (its origin, from the ticket response's `data.url`, plus the
-  // unchanged mount path) with that ticket as `?ticket=`.
-  let ticketBody;
-  try {
-    ticketBody = await (
-      await gatewayFetch("/v1/plugins/ticket", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plugin: "livehost" }),
-      })
-    ).json();
-  } catch (error) {
-    setLhStatus("could not reach gateway for a ticket", "status-error");
-    setLhSessionUI("idle");
-    return;
-  }
-  const pluginUrl = ticketBody?.data?.url;
-  // The gateway's /v1/plugins/ticket response (Task 4 of this plan) names
-  // this field `token`, not `ticket` -- confirmed against
-  // .superpowers/sdd/2026-08-05-gateway-plugin-contract/task-4-brief.md's
-  // own test: `{"success": true, "data": {"url", "token", "expires_in"}}`.
-  const ticket = ticketBody?.data?.token;
-  if (!pluginUrl || !ticket) {
-    setLhStatus("plugin ticket unavailable", "status-error");
+  // is served BY the plugin, cross-origin from the gateway. It does NOT
+  // re-mint a fresh ticket here: GATEWAY_TOKEN is already a valid plugin
+  // ticket, minted once by the gateway's own nav (plugins-nav.js) right
+  // before it opened this tab, and it is exactly the credential this page
+  // needs for the WS `?ticket=` param and for pluginFetch's control calls.
+  //
+  // Re-minting a second ticket using the first one as bearer was tried
+  // first and removed: POST /v1/plugins/ticket is not (and should not be)
+  // on auth_guard's plugin-ticket allowlist, because a ticket that can mint
+  // its own successor lets a leaked ticket be kept alive indefinitely by
+  // re-minting before each 60s expiry -- exactly the unbounded-lifetime
+  // exposure the short TTL exists to prevent. Reusing the one already in
+  // hand needs no such widening and is one credential, one purpose, start
+  // to finish.
+  //
+  // `pluginUrl` needs no gateway round trip either: this page IS the
+  // plugin, so its own origin already is the plugin's URL.
+  const pluginUrl = window.location.origin;
+  const ticket = GATEWAY_TOKEN;
+  if (!ticket) {
+    setLhStatus("plugin ticket unavailable -- reopen this tab from the gateway", "status-error");
     setLhSessionUI("idle");
     return;
   }
