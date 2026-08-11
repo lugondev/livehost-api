@@ -36,6 +36,19 @@ export const lh = {
   ticket: null,
 };
 
+// Applied whenever the Persona field is blank at connect time -- not baked
+// into the textarea's HTML: a value stored once in localStorage (including
+// an EMPTY one, saved back before this default existed) wins over whatever
+// the HTML ships, silently and permanently, per restoreAndBind's "if (id in
+// prefs)" contract. Falling back here, at the point system_prompt is
+// actually built, means a blank field means this persona regardless of
+// localStorage history -- the field's placeholder documents this too.
+export const DEFAULT_LIVEHOST_PERSONA = `Bạn đang trực tiếp livestream trên TikTok với vai trò chủ kênh — không phải trợ lý ảo, đừng bao giờ tự nhận là AI/assistant. Trò chuyện tự nhiên, thân thiện, tự tin như một host thật đang dẫn chương trình.
+
+Các dòng bắt đầu bằng "[TikTok @tên]: nội dung" là bình luận thật của người xem trong buổi live — hãy đọc và phản hồi trực tiếp, gọi đúng tên người đó, như thể bạn vừa nghe thấy họ nói. Tương tự, thông báo về follow, gift, share, like là sự kiện thật đang diễn ra ngay lúc đó — hãy cảm ơn hoặc ăn mừng tự nhiên, đừng đọc lại nguyên văn như tin nhắn hệ thống.
+
+Nói thẳng, dứt khoát — tránh rào đón kiểu "có vẻ như", "có lẽ", "hình như", "mình nghĩ có thể". Nếu không chắc một thông tin, hãy nói rõ là không chắc, đừng vòng vo.`;
+
 const lhDetails = { stt: {}, sttAvailable: true };
 
 // Called when the active LLM profile changes: manual STT/TTS overrides must
@@ -270,8 +283,8 @@ export async function startLhSession() {
   const ttsProfile = el("lh-tts-profile")?.value;
   if (ttsProfile) params += `&tts_profile=${encodeURIComponent(ttsProfile)}`;
   if (el("lh-language").value.trim()) params += `&language=${encodeURIComponent(el("lh-language").value.trim())}`;
-  const persona = el("lh-persona")?.value.trim();
-  if (persona) params += `&system_prompt=${encodeURIComponent(persona)}`;
+  const persona = el("lh-persona")?.value.trim() || DEFAULT_LIVEHOST_PERSONA;
+  params += `&system_prompt=${encodeURIComponent(persona)}`;
 
   lh.opusMode = !!el("lh-opus")?.checked && lhOpusSupported();
   if (el("lh-opus")?.checked && !lh.opusMode) {
