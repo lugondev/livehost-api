@@ -234,18 +234,28 @@ class TikTokLiveClientAdapter:
         self._register_handlers()
 
     def _register_handlers(self) -> None:
+        # add_listener(), not on(): TikTokLiveClient.on() (client.py) calls
+        # `super().on(event.get_type(), f)`, and pyee's base EventEmitter.on()
+        # dispatches to `self.add_listener(event, f)` -- `self` is still this
+        # TikTokLiveClient instance, so that lands back on
+        # TikTokLiveClient.add_listener's own override, which calls
+        # `event.get_type()` a SECOND time on what is by then already a
+        # string. A genuine bug in TikTokLive 6.6.6 (confirmed: same crash
+        # with a bare TikTokLiveClient + client.on(), no adapter code
+        # involved) -- .add_listener() is the direct path and only resolves
+        # the type once.
         from TikTokLive.events import CommentEvent, FollowEvent, GiftEvent, LikeEvent, ShareEvent
 
-        self._client.on(CommentEvent, self._on_comment)
-        self._client.on(GiftEvent, self._on_gift)
-        self._client.on(LikeEvent, self._on_like)
-        self._client.on(FollowEvent, self._on_follow)
-        self._client.on(ShareEvent, self._on_share)
+        self._client.add_listener(CommentEvent, self._on_comment)
+        self._client.add_listener(GiftEvent, self._on_gift)
+        self._client.add_listener(LikeEvent, self._on_like)
+        self._client.add_listener(FollowEvent, self._on_follow)
+        self._client.add_listener(ShareEvent, self._on_share)
 
         from TikTokLive.events.custom_events import DisconnectEvent, LiveEndEvent
 
-        self._client.on(DisconnectEvent, self._on_disconnect)
-        self._client.on(LiveEndEvent, self._on_disconnect)
+        self._client.add_listener(DisconnectEvent, self._on_disconnect)
+        self._client.add_listener(LiveEndEvent, self._on_disconnect)
 
     async def _on_comment(self, event) -> None:
         await self._queue.put(map_comment(event))
