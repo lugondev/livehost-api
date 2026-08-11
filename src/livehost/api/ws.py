@@ -143,6 +143,14 @@ async def livehost_stream(websocket: WebSocket) -> None:
     except ValueError:
         idle_topic_seconds = 0
     skip_like_share = q.get("skip_like_share") == "1"
+    try:
+        batch_min_events = max(1, int(q.get("batch_min_events") or 1))
+    except ValueError:
+        batch_min_events = 1
+    try:
+        batch_wait_seconds = max(0.0, float(q.get("batch_wait_seconds") or 0))
+    except ValueError:
+        batch_wait_seconds = 0.0
 
     scheduler = EventScheduler(
         mention_keywords=_mention_keywords(),
@@ -310,11 +318,17 @@ async def livehost_stream(websocket: WebSocket) -> None:
             # batching, or the streamer is mid-turn) is still evidence the
             # room is live -- must not let poll_idle fire underneath it.
             relay.note_activity()
+            # Starts the batch-wait clock on the FIRST event of a fresh
+            # window -- see Relay.note_pending's own docstring for why it
+            # must not reset on every subsequent event in the same batch.
+            relay.note_pending()
 
     async def _poll_social() -> None:
         while True:
             await asyncio.sleep(_SOCIAL_POLL_SECONDS)
-            await relay.poll_social()
+            await relay.poll_social(
+                batch_min_events=batch_min_events, batch_wait_seconds=batch_wait_seconds
+            )
 
     async def _poll_idle() -> None:
         while True:

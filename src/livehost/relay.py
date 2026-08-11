@@ -36,6 +36,20 @@ class Relay:
         # monotonic, not wall clock: only ever compared to itself, and must
         # never jump backward/forward with a system clock adjustment.
         self.last_activity = time.monotonic()
+        # When the current batch window started waiting, or None if nothing
+        # is accumulating one (queue empty, or the last turn already
+        # consumed everything). See note_pending()/poll_social.
+        self.pending_since: float | None = None
+
+    def note_pending(self) -> None:
+        """Mark the start of a fresh batch window, if one isn't already
+        running. Called from ws.py's drain loop on every social event that
+        actually made it into the scheduler (post skip_like_share filter),
+        so poll_social's batch_wait_seconds counts from the FIRST event of
+        the batch, not the most recent one -- otherwise a steady trickle of
+        comments could keep pushing the wait out and never fire at all."""
+        if self.pending_since is None:
+            self.pending_since = time.monotonic()
 
     def note_activity(self) -> None:
         """Reset the idle clock. Called on anything that means the room is
@@ -82,26 +96,57 @@ class Relay:
         if text is not None:
             await self.upstream.send_text_raw(text)
 
-    async def poll_social(self) -> None:
+    async def poll_social(self, batch_min_events: int = 1, batch_wait_seconds: float = 0.0) -> None:
         """Fire one social turn if the streamer is quiet, nothing is already
-        in flight, and something waits.
+        in flight, something waits, AND the batch window (if any) is ready.
 
         Found live: on a busy room, comments keep queuing continuously, so
         `scheduler.has_pending()` stays true for the whole stream. Without
-        this guard, the poll loop (every _SOCIAL_POLL_SECONDS) popped and
-        sent a fresh turn on every tick regardless of whether the previous
-        one had ever received its turn_done -- flooding the gateway with
-        overlapping "text" turns, spamming the LLM, and leaving the browser
-        UI stuck re-entering "processing" before the prior turn's response
-        ever settled.
+        the in-flight guard, the poll loop (every _SOCIAL_POLL_SECONDS)
+        popped and sent a fresh turn on every tick regardless of whether the
+        previous one had ever received its turn_done -- flooding the
+        gateway with overlapping "text" turns, spamming the LLM, and
+        leaving the browser UI stuck re-entering "processing" before the
+        prior turn's response ever settled.
+
+        `batch_min_events`/`batch_wait_seconds` (both from the browser's own
+        UI controls, ws.py) throttle the OTHER complaint: replying to every
+        single comment the instant it lands reads as frantic, not like a
+        host who lets a few comments pile up before addressing them. The
+        gate is an OR, matching "2-3 comment or 5/10/20/30s, whichever
+        first": fire once there are enough events pending, OR once the
+        oldest one in the current batch has waited long enough, so a lone
+        comment in a quiet room still gets answered eventually instead of
+        waiting forever for two more that never come.
+
+        `batch_wait_seconds <= 0` means "no time constraint," not "time
+        constraint already met" -- it must contribute nothing to the OR, or
+        setting only batch_min_events (leaving the time dropdown at "Tắt")
+        would fire on the very first event regardless, since a disabled
+        time gate would otherwise vacuously satisfy the OR on its own.
+        Defaults (1, 0) still reproduce the old fire-immediately behavior:
+        has_pending() alone already implies pending_count() >= 1, so
+        enough_events carries it without the time gate's help.
         """
         if self.social_turn_in_flight:
+            return
+        if not self.scheduler.has_pending():
+            return
+        if self.voice_active:
+            return
+        enough_events = self.scheduler.pending_count() >= batch_min_events
+        waited_enough = batch_wait_seconds > 0 and (
+            self.pending_since is None
+            or time.monotonic() - self.pending_since >= batch_wait_seconds
+        )
+        if not (enough_events or waited_enough):
             return
         result = self.orchestrator.poll_social_turn(self.voice_active)
         if result is None:
             return
         _turn, formatted = result
         self.social_turn_in_flight = True
+        self.pending_since = None
         self.note_activity()
         await self.upstream.send_text(formatted)
 

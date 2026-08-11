@@ -304,10 +304,10 @@ def test_social_turn_does_not_fire_while_the_streamer_is_mid_turn(gateway, authe
     observations: list[tuple[bool, int, int]] = []  # (voice_active, pending_before, pending_after)
     real_poll_social = Relay.poll_social
 
-    async def _observed_poll_social(self):
+    async def _observed_poll_social(self, *args, **kwargs):
         voice_active = self.voice_active
         pending_before = self.scheduler.pending_count()
-        await real_poll_social(self)
+        await real_poll_social(self, *args, **kwargs)
         observations.append((voice_active, pending_before, self.scheduler.pending_count()))
 
     monkeypatch.setattr(Relay, "poll_social", _observed_poll_social)

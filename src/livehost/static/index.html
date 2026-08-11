@@ -111,6 +111,26 @@
         </label>
       </div>
       <div class="row">
+        <label title="Đợi tích đủ số bình luận này rồi mới trả lời gộp một lần, thay vì trả lời ngay từng cái. Nếu thời gian chờ tối đa hết trước khi đủ số lượng, AI vẫn trả lời với những gì đang có.">
+          Đợi tối thiểu (comment)
+          <select id="lh-batch-min-events">
+            <option value="">Trả lời ngay</option>
+            <option value="2">2 comment</option>
+            <option value="3">3 comment</option>
+          </select>
+        </label>
+        <label title="Nếu chưa đủ số comment tối thiểu, AI vẫn sẽ trả lời sau khi đợi tối đa khoảng thời gian này, để tránh im lặng quá lâu.">
+          Thời gian chờ tối đa
+          <select id="lh-batch-wait-seconds">
+            <option value="">Tắt</option>
+            <option value="5">5 giây</option>
+            <option value="10">10 giây</option>
+            <option value="20">20 giây</option>
+            <option value="30">30 giây</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
         <label style="flex-basis: 100%">
           Persona (leave blank to use the built-in TikTok-host persona — reacts to comments/gifts by name, no AI disclaimers, no hedging)
           <textarea id="lh-persona" rows="3" placeholder="e.g. Bạn là Lan, chủ kênh live bán mỹ phẩm. Xưng &quot;chị&quot;, gọi viewer là &quot;các bạn&quot;..."></textarea>
@@ -195,6 +215,8 @@
       restoreAndBind("lh-reply-length");
       restoreAndBind("lh-idle-topic");
       restoreAndBind("lh-skip-like-share");
+      restoreAndBind("lh-batch-min-events");
+      restoreAndBind("lh-batch-wait-seconds");
 
       loadLivehostEngines();
     </script>

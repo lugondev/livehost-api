@@ -326,6 +326,10 @@ export async function startLhSession() {
   const idleTopicSeconds = el("lh-idle-topic")?.value;
   if (idleTopicSeconds) params += `&idle_topic_seconds=${encodeURIComponent(idleTopicSeconds)}`;
   if (el("lh-skip-like-share")?.checked) params += `&skip_like_share=1`;
+  const batchMinEvents = el("lh-batch-min-events")?.value;
+  if (batchMinEvents) params += `&batch_min_events=${encodeURIComponent(batchMinEvents)}`;
+  const batchWaitSeconds = el("lh-batch-wait-seconds")?.value;
+  if (batchWaitSeconds) params += `&batch_wait_seconds=${encodeURIComponent(batchWaitSeconds)}`;
 
   lh.opusMode = !!el("lh-opus")?.checked && lhOpusSupported();
   if (el("lh-opus")?.checked && !lh.opusMode) {

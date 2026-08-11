@@ -233,3 +233,85 @@ async def test_note_activity_resets_the_idle_clock():
 
     await relay.poll_idle(idle_seconds=5)
     assert upstream.sent_text == []
+
+
+async def test_poll_social_waits_for_batch_min_events():
+    """ "2-3 comment ... mới trả lời": a single pending comment must not fire
+    a turn on its own when batch_min_events asks for more, even though
+    scheduler.has_pending() is already true."""
+    scheduler = EventScheduler()
+    scheduler.enqueue(_event(user_name="ann", text="one"))
+    upstream = FakeUpstream()
+    relay = _relay(upstream, scheduler)
+
+    await relay.poll_social(batch_min_events=3, batch_wait_seconds=0)
+    assert upstream.sent_text == []
+
+    scheduler.enqueue(_event(id="e2", user_name="bob", text="two"))
+    scheduler.enqueue(_event(id="e3", user_name="cara", text="three"))
+    await relay.poll_social(batch_min_events=3, batch_wait_seconds=0)
+    assert len(upstream.sent_text) == 1
+
+
+async def test_poll_social_fires_after_batch_wait_seconds_even_with_one_event():
+    """ "... hoặc 5/10/20/30s": the OR half of the gate -- a lone comment in
+    a quiet room must still get answered once it has waited long enough,
+    not wait forever for two more that never arrive."""
+    scheduler = EventScheduler()
+    scheduler.enqueue(_event(user_name="ann", text="hi"))
+    upstream = FakeUpstream()
+    relay = _relay(upstream, scheduler)
+    relay.pending_since = None  # simulate note_pending() never having run
+    relay.note_pending()
+    relay.pending_since -= 10  # 10s into the batch window
+
+    await relay.poll_social(batch_min_events=3, batch_wait_seconds=5)
+    assert len(upstream.sent_text) == 1
+
+
+async def test_poll_social_does_not_fire_before_either_threshold():
+    scheduler = EventScheduler()
+    scheduler.enqueue(_event(user_name="ann", text="hi"))
+    upstream = FakeUpstream()
+    relay = _relay(upstream, scheduler)
+    relay.note_pending()  # window just started
+
+    await relay.poll_social(batch_min_events=3, batch_wait_seconds=5)
+    assert upstream.sent_text == []
+
+
+async def test_default_batch_args_reproduce_fire_immediately():
+    """Backward compatibility: callers that never pass batch_min_events/
+    batch_wait_seconds (every existing caller, and ws.py when the browser's
+    dropdowns are left at "mặc định") must see the exact old behavior --
+    fire on the very first pending event, no waiting."""
+    scheduler = EventScheduler()
+    scheduler.enqueue(_event(user_name="ann", text="hi"))
+    upstream = FakeUpstream()
+    relay = _relay(upstream, scheduler)
+
+    await relay.poll_social()
+    assert len(upstream.sent_text) == 1
+
+
+async def test_note_pending_does_not_reset_an_already_running_window():
+    upstream = FakeUpstream()
+    relay = _relay(upstream)
+    relay.note_pending()
+    first = relay.pending_since
+
+    relay.note_pending()
+
+    assert relay.pending_since == first
+
+
+async def test_a_fired_social_turn_clears_pending_since():
+    scheduler = EventScheduler()
+    scheduler.enqueue(_event(user_name="ann", text="hi"))
+    upstream = FakeUpstream()
+    relay = _relay(upstream, scheduler)
+    relay.note_pending()
+
+    await relay.poll_social()
+
+    assert relay.pending_since is None
