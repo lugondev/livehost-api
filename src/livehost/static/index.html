@@ -62,10 +62,10 @@
             <option value="">(none — server defaults)</option>
           </select>
         </label>
-        <label>
-          TTS Profile
+        <label title="Leave unset to use the LLM Profile's own linked TTS voice (e.g. esp32-assistant already carries its own TTS profile) -- this is only for overriding it with a different voice.">
+          TTS Profile (override)
           <select id="lh-tts-profile">
-            <option value="">(server default)</option>
+            <option value="">(follow LLM Profile)</option>
           </select>
         </label>
       </div>
