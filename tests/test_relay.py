@@ -115,6 +115,34 @@ async def test_no_social_turn_while_the_streamer_is_talking():
     assert upstream.sent_text == []
 
 
+async def test_a_second_social_turn_does_not_fire_while_the_first_is_in_flight():
+    """Found live: on a busy room, comments keep queuing continuously, so
+    has_pending() never goes false between polls. Without this guard, the
+    poll loop fired a fresh social turn on every tick even though the
+    previous one's turn_done had not arrived yet, flooding the gateway with
+    overlapping turns and spamming the LLM."""
+    scheduler = EventScheduler()
+    scheduler.enqueue(_event(kind="comment", user_name="ann", text="first"))
+    upstream = FakeUpstream()
+    relay = _relay(upstream, scheduler)
+    relay.voice_active = False
+
+    await relay.poll_social()
+    assert len(upstream.sent_text) == 1
+    assert relay.social_turn_in_flight is True
+
+    # A second comment arrives while the first turn is still in flight.
+    scheduler.enqueue(_event(kind="comment", user_name="bob", text="second"))
+    await relay.poll_social()
+    assert len(upstream.sent_text) == 1, "must not fire a second turn before turn_done"
+
+    # Once the first turn completes, the queued second comment fires normally.
+    relay.social_turn_in_flight = False
+    await relay.poll_social()
+    assert len(upstream.sent_text) == 2
+    assert "[TikTok @bob]: second" in upstream.sent_text[1]
+
+
 async def test_barge_in_aborts_the_social_turn():
     """The streamer starting to talk mid-social-turn must cut the co-host off,
     which is what {"type":"abort"} is for."""

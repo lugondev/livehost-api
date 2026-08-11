@@ -57,7 +57,20 @@ class Relay:
             await self.upstream.send_text_raw(text)
 
     async def poll_social(self) -> None:
-        """Fire one social turn if the streamer is quiet and something waits."""
+        """Fire one social turn if the streamer is quiet, nothing is already
+        in flight, and something waits.
+
+        Found live: on a busy room, comments keep queuing continuously, so
+        `scheduler.has_pending()` stays true for the whole stream. Without
+        this guard, the poll loop (every _SOCIAL_POLL_SECONDS) popped and
+        sent a fresh turn on every tick regardless of whether the previous
+        one had ever received its turn_done -- flooding the gateway with
+        overlapping "text" turns, spamming the LLM, and leaving the browser
+        UI stuck re-entering "processing" before the prior turn's response
+        ever settled.
+        """
+        if self.social_turn_in_flight:
+            return
         result = self.orchestrator.poll_social_turn(self.voice_active)
         if result is None:
             return
