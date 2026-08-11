@@ -3,6 +3,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from livehost.auth import IntrospectResult
 from tests.fake_gateway import build_fake_gateway
 
 
@@ -43,7 +44,9 @@ def gateway(monkeypatch):
 @pytest.fixture
 def authed(monkeypatch):
     async def _introspect(ticket, client=None):
-        return "user-1" if ticket == "good" else None
+        if ticket != "good":
+            return IntrospectResult(user_id=None, session_token=None)
+        return IntrospectResult(user_id="user-1", session_token="sess-tok-user-1")
 
     monkeypatch.setattr("livehost.api.ws.introspect", _introspect)
 
@@ -103,7 +106,10 @@ def test_a_different_identity_cannot_hijack_an_existing_session_id(gateway, monk
     """
 
     async def _introspect(ticket, client=None):
-        return {"good": "user-1", "intruder": "user-2"}.get(ticket)
+        user_id = {"good": "user-1", "intruder": "user-2"}.get(ticket)
+        if user_id is None:
+            return IntrospectResult(user_id=None, session_token=None)
+        return IntrospectResult(user_id=user_id, session_token=f"sess-tok-{user_id}")
 
     monkeypatch.setattr("livehost.api.ws.introspect", _introspect)
 

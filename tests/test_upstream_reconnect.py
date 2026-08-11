@@ -4,6 +4,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from livehost.auth import IntrospectResult
 from tests.fake_gateway import build_fake_gateway
 
 
@@ -102,7 +103,9 @@ def gateway(monkeypatch):
 @pytest.fixture
 def authed(monkeypatch):
     async def _introspect(ticket, client=None):
-        return "user-1" if ticket == "good" else None
+        if ticket != "good":
+            return IntrospectResult(user_id=None, session_token=None)
+        return IntrospectResult(user_id="user-1", session_token="sess-tok-user-1")
 
     monkeypatch.setattr("livehost.api.ws.introspect", _introspect)
 

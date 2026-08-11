@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from livehost.app import app
+from livehost.auth import IntrospectResult
 from livehost.registry import LivehostSession, livehost_registry
 
 
@@ -27,7 +28,10 @@ def owned(monkeypatch):
     livehost_registry.register("sess-1", session)
 
     async def _introspect(ticket, client=None):
-        return {"tkt-owner": "user-1", "tkt-other": "user-2"}.get(ticket)
+        user_id = {"tkt-owner": "user-1", "tkt-other": "user-2"}.get(ticket)
+        if user_id is None:
+            return IntrospectResult(user_id=None, session_token=None)
+        return IntrospectResult(user_id=user_id, session_token=f"sess-tok-{user_id}")
 
     monkeypatch.setattr("livehost.api.control.introspect", _introspect)
     yield

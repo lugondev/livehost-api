@@ -19,14 +19,41 @@ import json
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 
+def _bearer_from_subprotocols(websocket: WebSocket) -> str | None:
+    """Mirrors the gateway's own auth_guard._bearer_from_subprotocols exactly:
+    the credential rides as the element right after "bearer" in the
+    Sec-WebSocket-Protocol offer list, never a query param. Found live: this
+    fake used to accept() unconditionally and read only query_params, so it
+    could not have caught Bug 5 (token sent as `?token=`, and even transported
+    correctly would have failed the gateway's real salt check) -- three of
+    five live bugs escaped review specifically because this "executable spec"
+    never modeled the real gateway's auth mechanism at all."""
+    protocols = websocket.scope.get("subprotocols") or []
+    for index, proto in enumerate(protocols):
+        if proto == "bearer" and index + 1 < len(protocols):
+            return protocols[index + 1]
+    return None
+
+
 def build_fake_gateway() -> tuple[FastAPI, dict]:
     """Return (app, log). `log` records everything the plugin sent upstream."""
     app = FastAPI()
-    log = {"audio": [], "control": [], "query": {}}
+    log = {"audio": [], "control": [], "query": {}, "session_token": None}
 
     @app.websocket("/v1/conversation/stream")
     async def stream(websocket: WebSocket):
-        await websocket.accept()
+        # Real gateway behavior (conversation.py's conversation_stream):
+        # reject *before* accept() when no bearer subprotocol is offered --
+        # Starlette turns a pre-accept close into an HTTP-level rejection at
+        # the handshake, exactly the 403 Bug 5 was diagnosed from in
+        # /tmp/livehost-smoke/plugin.log. A `?token=` query param is never
+        # read here, on purpose: that transport was the first half of Bug 5.
+        bearer = _bearer_from_subprotocols(websocket)
+        if not bearer:
+            await websocket.close(code=4401, reason="unauthorized")
+            return
+        log["session_token"] = bearer
+        await websocket.accept(subprotocol="bearer")
         log["query"] = dict(websocket.query_params)
         await websocket.send_json(
             {

@@ -15,29 +15,47 @@ from urllib.parse import urlencode
 import websockets
 
 
-def build_upstream_url(base: str, token: str, params: dict[str, str | None]) -> str:
+def build_upstream_url(base: str, params: dict[str, str | None]) -> str:
     """ws(s):// URL for the conversation socket.
 
     Blank and None params are dropped rather than sent empty: `?profile=` is
     not the same as no profile -- the gateway would try to resolve a profile
     named "" and emit a warning the browser would then see.
+
+    No token here, and none was ever meant to be. Found live: the gateway's
+    own resolve_ws_identity never reads a `?token=` query param at all -- it
+    only accepts a bearer riding the `Sec-WebSocket-Protocol: bearer, <token>`
+    subprotocol slot, same as every other WS bearer in this codebase. A
+    query-param token silently authenticated nothing; every connection was
+    rejected with an HTTP 403 at the handshake, before this file's own
+    `connect()` ever got a WS to hand back.
     """
     scheme = "wss" if base.startswith("https://") else "ws"
     host = base.split("://", 1)[-1].rstrip("/")
     query = {k: v for k, v in params.items() if v}
-    query["token"] = token
     return f"{scheme}://{host}/v1/conversation/stream?{urlencode(query)}"
 
 
 class Upstream:
-    """One conversation socket, for one browser session."""
+    """One conversation socket, for one browser session.
 
-    def __init__(self, base: str, token: str, params: dict[str, str | None]) -> None:
-        self._url = build_upstream_url(base, token, params)
+    Authenticates as a plugin SESSION token (see tokens.py's
+    PLUGIN_SESSION_TTL_SECONDS on the gateway) -- never the browser's own
+    plugin ticket. The ticket is audience-bound to one plugin and designed to
+    survive a browser/URL; resolve_ws_identity does not (and must not)
+    accept it directly. The session token is what auth.introspect() trades
+    it for, server-to-server, specifically so this connection can open.
+    """
+
+    def __init__(self, base: str, session_token: str, params: dict[str, str | None]) -> None:
+        self._url = build_upstream_url(base, params)
+        self._session_token = session_token
         self._ws: websockets.ClientConnection | None = None
 
     async def connect(self) -> None:
-        self._ws = await websockets.connect(self._url, max_size=None)
+        self._ws = await websockets.connect(
+            self._url, subprotocols=["bearer", self._session_token], max_size=None
+        )
 
     async def send_audio(self, data: bytes) -> None:
         if self._ws is not None:

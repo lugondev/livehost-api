@@ -1,8 +1,10 @@
 """The browser-facing socket.
 
 Four jobs, and none of them is running a conversation turn:
-  1. accept, trade the ticket for a user id
-  2. open one upstream conversation socket with that user's ticket
+  1. accept, trade the ticket for a user id AND a plugin session token
+  2. open one upstream conversation socket authenticated with that session
+     token -- never the browser's own ticket, which resolve_ws_identity does
+     not (and must not) accept directly
   3. relay both directions
   4. poll the social scheduler and inject turns as text
 
@@ -104,10 +106,16 @@ async def _redial(
 @router.websocket("/stream")
 async def livehost_stream(websocket: WebSocket) -> None:
     ticket = websocket.query_params.get("ticket") or ""
-    user_id = await introspect(ticket)
-    if user_id is None:
+    identity = await introspect(ticket)
+    # session_token can only be None here alongside user_id (see
+    # IntrospectResult) -- checking both explicitly rather than trusting that
+    # invariant is what stops a malformed-but-200 gateway response from
+    # reaching Upstream.connect() with a non-string subprotocol value later.
+    if identity.user_id is None or identity.session_token is None:
         await websocket.close(code=4401, reason="unauthorized")
         return
+    user_id = identity.user_id
+    session_token = identity.session_token
     await websocket.accept()
 
     q = websocket.query_params
@@ -158,9 +166,19 @@ async def livehost_stream(websocket: WebSocket) -> None:
     # already exists and is not owned by the caller" -- an id it has never
     # seen is not denied, and ConversationSession.start() creates it fresh.
     # Checked against the gateway source during Task 10 review, not assumed.
+    # session_token, not `ticket`: the browser's ticket cannot authenticate
+    # this connection at all (see Upstream's own docstring). Fixed at
+    # construction and reused verbatim by every reconnect attempt in _down()
+    # below, same as the URL is -- both carry PLUGIN_SESSION_TTL_SECONDS'
+    # 60s TTL, so a reconnect sequence whose cumulative backoff exceeds that
+    # would present an expired token on a later attempt. Not solved here:
+    # doing so well means re-introspecting the browser's own ticket, which is
+    # equally short-lived and not refreshed by the browser either -- a
+    # broader reconnect-identity design than fixing the first connection
+    # calls for.
     upstream = Upstream(
         settings.gateway_url,
-        ticket,
+        session_token,
         resume_params(
             {
                 "profile": q.get("profile"),

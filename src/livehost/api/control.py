@@ -31,7 +31,8 @@ async def _caller_user_id(request: Request) -> str | None:
     scheme, _, ticket = request.headers.get("Authorization", "").partition(" ")
     if scheme.lower() != "bearer" or not ticket.strip():
         return None
-    return (await introspect(ticket.strip())) or None
+    result = await introspect(ticket.strip())
+    return result.user_id or None
 
 
 async def _get_owned_session(session_id: str, request: Request) -> LivehostSession:
