@@ -89,6 +89,36 @@ def test_browser_audio_reaches_the_gateway(gateway, authed):
     assert b"MIC" in gateway["audio"]
 
 
+def test_skip_social_event_drops_like_and_share_when_enabled():
+    from livehost.api.ws import _skip_social_event
+    from livehost.schemas import SocialEvent
+
+    def _event(kind):
+        return SocialEvent(id="e1", kind=kind, user_id="u1", user_name="ann", timestamp=1.0)
+
+    for kind in ("like", "share"):
+        assert _skip_social_event(_event(kind), skip_like_share=True) is True
+
+
+def test_skip_social_event_leaves_comments_and_gifts_alone():
+    from livehost.api.ws import _skip_social_event
+    from livehost.schemas import SocialEvent
+
+    def _event(kind):
+        return SocialEvent(id="e1", kind=kind, user_id="u1", user_name="ann", timestamp=1.0)
+
+    for kind in ("comment", "gift", "follow"):
+        assert _skip_social_event(_event(kind), skip_like_share=True) is False
+
+
+def test_skip_social_event_is_a_noop_when_disabled():
+    from livehost.api.ws import _skip_social_event
+    from livehost.schemas import SocialEvent
+
+    like = SocialEvent(id="e1", kind="like", user_id="u1", user_name="ann", timestamp=1.0)
+    assert _skip_social_event(like, skip_like_share=False) is False
+
+
 def test_a_persona_override_is_forwarded_to_the_gateway(gateway, authed):
     """?system_prompt= (the livehost UI's own persona field) must reach the
     gateway's WS query string unchanged, since that is what
@@ -118,6 +148,50 @@ def test_no_persona_override_means_no_system_prompt_param_at_all(gateway, authed
             ws.receive_json()
 
     assert "system_prompt" not in gateway["query"]
+
+
+def test_skip_like_share_end_to_end_never_reaches_the_scheduler(gateway, authed):
+    """Drives the real _drain_social loop (not just the _skip_social_event
+    unit above) by injecting straight onto the live ingestor's own queue --
+    the same object _drain_social reads from -- so this exercises the actual
+    wiring: ?skip_like_share=1 on the URL reaching the closure's
+    skip_like_share variable, not just the predicate function in isolation.
+    """
+    from livehost.app import app
+    from livehost.registry import livehost_registry
+    from livehost.schemas import SocialEvent
+
+    session_id = "skip-like-share-1"
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            f"/v1/livehost/stream?ticket=good&session_id={session_id}&skip_like_share=1"
+        ) as ws:
+            ws.receive_json()
+
+            session = livehost_registry.get(session_id)
+            session.ingestor.queue.put_nowait(
+                SocialEvent(id="e1", kind="like", user_id="u1", user_name="ann", timestamp=1.0)
+            )
+            session.ingestor.queue.put_nowait(
+                SocialEvent(
+                    id="e2",
+                    kind="comment",
+                    user_id="u2",
+                    user_name="bob",
+                    text="hi",
+                    timestamp=1.0,
+                )
+            )
+
+            deadline = time.monotonic() + 5
+            while session.scheduler.pending_count() == 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+    # Only the comment made it through -- the like never touched the
+    # scheduler at all, not merely "arrived but was never spoken."
+    assert session.scheduler.pending_count() == 1
+    turn = session.scheduler.next_turn()
+    assert turn.events[0].kind == "comment"
 
 
 def test_a_different_identity_cannot_hijack_an_existing_session_id(gateway, monkeypatch):

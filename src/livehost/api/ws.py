@@ -50,6 +50,16 @@ def _mention_keywords() -> list[str]:
     return [k.strip() for k in settings.mention_keywords.split(",") if k.strip()]
 
 
+def _skip_social_event(event, skip_like_share: bool) -> bool:
+    """True if `event` must never reach the scheduler -- "removed from
+    context," not merely "not spoken aloud." A popular room fires dozens of
+    likes a second; queuing either kind is pure noise that would either spam
+    "X liked/shared" turns or, batched, drown out real comments/gifts for
+    scheduler.batch_top_k slots. Opt-in (?skip_like_share=1), not the
+    default: some streamers do want the co-host to react to those."""
+    return skip_like_share and event.kind in ("like", "share")
+
+
 def resume_params(params: dict, session_id: str | None) -> dict:
     """Query params for the Upstream connection that will later be resumed.
 
@@ -132,6 +142,7 @@ async def livehost_stream(websocket: WebSocket) -> None:
         idle_topic_seconds = max(0, int(q.get("idle_topic_seconds") or 0))
     except ValueError:
         idle_topic_seconds = 0
+    skip_like_share = q.get("skip_like_share") == "1"
 
     scheduler = EventScheduler(
         mention_keywords=_mention_keywords(),
@@ -288,6 +299,12 @@ async def livehost_stream(websocket: WebSocket) -> None:
     async def _drain_social() -> None:
         while True:
             event = await raw_social_queue.get()
+            # A room's like/share volume is not treated as "activity"
+            # either (no note_activity() call on this branch) -- silent
+            # likes must not keep poll_idle from firing when nothing else
+            # is happening.
+            if _skip_social_event(event, skip_like_share):
+                continue
             scheduler.enqueue(event)
             # A comment that arrives but hasn't fired a turn yet (still
             # batching, or the streamer is mid-turn) is still evidence the

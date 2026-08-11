@@ -325,6 +325,7 @@ export async function startLhSession() {
   if (finalPersona) params += `&system_prompt=${encodeURIComponent(finalPersona)}`;
   const idleTopicSeconds = el("lh-idle-topic")?.value;
   if (idleTopicSeconds) params += `&idle_topic_seconds=${encodeURIComponent(idleTopicSeconds)}`;
+  if (el("lh-skip-like-share")?.checked) params += `&skip_like_share=1`;
 
   lh.opusMode = !!el("lh-opus")?.checked && lhOpusSupported();
   if (el("lh-opus")?.checked && !lh.opusMode) {

@@ -106,6 +106,9 @@
             <option value="120">2 phút</option>
           </select>
         </label>
+        <label class="check" title="Like/share sẽ không được đưa vào ngữ cảnh của AI -- không phản hồi, không tính vào lịch sử hội thoại, chỉ đơn giản là bị bỏ qua hoàn toàn.">
+          <input type="checkbox" id="lh-skip-like-share" /> Bỏ qua like/share
+        </label>
       </div>
       <div class="row">
         <label style="flex-basis: 100%">
@@ -191,6 +194,7 @@
       restoreAndBind("lh-tone");
       restoreAndBind("lh-reply-length");
       restoreAndBind("lh-idle-topic");
+      restoreAndBind("lh-skip-like-share");
 
       loadLivehostEngines();
     </script>
