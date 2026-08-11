@@ -191,6 +191,15 @@ async def livehost_stream(websocket: WebSocket) -> None:
                 "audio_out": q.get("audio_out"),
                 "output_sample_rate": q.get("output_sample_rate"),
                 "output": q.get("output") or "audio,text",
+                # Per-session persona override (gateway's
+                # SessionRuntimeConfig.persona_override) -- lets this page's
+                # own persona field replace profile.system_prompt without
+                # needing edit access to a gateway profile. Forwarded
+                # unchanged here so a reconnect (_redial, via this same
+                # resume_params call) keeps the same persona for the rest of
+                # the session instead of silently reverting to the profile's
+                # default mid-stream.
+                "system_prompt": q.get("system_prompt"),
             },
             session_id,
         ),

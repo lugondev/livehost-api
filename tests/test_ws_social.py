@@ -89,6 +89,37 @@ def test_browser_audio_reaches_the_gateway(gateway, authed):
     assert b"MIC" in gateway["audio"]
 
 
+def test_a_persona_override_is_forwarded_to_the_gateway(gateway, authed):
+    """?system_prompt= (the livehost UI's own persona field) must reach the
+    gateway's WS query string unchanged, since that is what
+    SessionRuntimeConfig.persona_override reads to replace profile.system_prompt
+    for this session."""
+    from livehost.app import app
+
+    persona = "You are Lan, the channel owner."
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            f"/v1/livehost/stream?ticket=good&system_prompt={persona.replace(' ', '+')}"
+        ) as ws:
+            ws.receive_json()
+
+    assert gateway["query"]["system_prompt"] == persona
+
+
+def test_no_persona_override_means_no_system_prompt_param_at_all(gateway, authed):
+    """A blank persona field must not send `system_prompt=` at all -- an empty
+    string would still be forwarded as a real (empty) query value, and the
+    gateway only falls back to the profile/server default when the param is
+    absent, not merely empty."""
+    from livehost.app import app
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/v1/livehost/stream?ticket=good") as ws:
+            ws.receive_json()
+
+    assert "system_prompt" not in gateway["query"]
+
+
 def test_a_different_identity_cannot_hijack_an_existing_session_id(gateway, monkeypatch):
     """H5, ported: livehost_registry.register() overwrites unconditionally on
     a session_id collision, and session_id is caller-supplied. Without a

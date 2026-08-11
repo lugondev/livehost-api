@@ -78,6 +78,12 @@
           <input type="checkbox" id="lh-opus" /> Opus downlink (low bandwidth)
         </label>
       </div>
+      <div class="row">
+        <label style="flex-basis: 100%">
+          Persona (how the AI should host — leave blank to use the profile's own system prompt)
+          <textarea id="lh-persona" rows="3" placeholder="e.g. Bạn là Lan, chủ kênh live bán mỹ phẩm. Xưng &quot;chị&quot;, gọi viewer là &quot;các bạn&quot;, trò chuyện thân thiện, tự nhiên như đang livestream thật, phản hồi trực tiếp bình luận của viewer."></textarea>
+        </label>
+      </div>
       <div class="actions">
         <button id="lh-session-start">Start Session</button>
         <button id="lh-session-stop" class="ghost" disabled>Stop Session</button>
@@ -146,6 +152,7 @@
       populateProfileDropdown("lh-profile", "/v1/profiles", "lh-profile");
       populateProfileDropdown("lh-tts-profile", "/v1/tts/profiles", "lh-tts-profile");
       if (el("lh-profile")) el("lh-profile").addEventListener("change", () => resetLhManualOverrides());
+      restoreAndBind("lh-persona");
 
       loadLivehostEngines();
     </script>
