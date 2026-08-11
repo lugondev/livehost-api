@@ -59,6 +59,14 @@ const TONE_DIRECTIVES = {
   playful: `Tông giọng: cợt nhả, trêu chọc viewer một cách duyên dáng và thân thiện, hay đùa giỡn, thoải mái, không nghiêm trọng hoá vấn đề gì -- nhưng vẫn tôn trọng, không xúc phạm ai.`,
 };
 
+// Same append-after-persona shape as TONE_DIRECTIVES -- reply length is a
+// delivery constraint, independent of tone or who the AI is playing.
+const REPLY_LENGTH_DIRECTIVES = {
+  "1": `Độ dài trả lời: đúng 1 câu, ngắn gọn, không lan man.`,
+  "1-2": `Độ dài trả lời: 1-2 câu.`,
+  "2-3": `Độ dài trả lời: 2-3 câu.`,
+};
+
 const lhDetails = { stt: {}, sttAvailable: true };
 
 // Called when the active LLM profile changes: manual STT/TTS overrides must
@@ -303,12 +311,11 @@ export async function startLhSession() {
   const typedPersona = el("lh-persona")?.value.trim();
   const profileSystemPrompt = el("lh-profile")?.selectedOptions?.[0]?.dataset.systemPrompt || "";
   const basePersona = typedPersona || (profile ? profileSystemPrompt : DEFAULT_LIVEHOST_PERSONA);
-  const toneDirective = TONE_DIRECTIVES[el("lh-tone")?.value || ""] || "";
-  const finalPersona = toneDirective
-    ? basePersona
-      ? `${basePersona}\n\n${toneDirective}`
-      : toneDirective
-    : basePersona;
+  const extraDirectives = [
+    TONE_DIRECTIVES[el("lh-tone")?.value || ""],
+    REPLY_LENGTH_DIRECTIVES[el("lh-reply-length")?.value || ""],
+  ].filter(Boolean);
+  const finalPersona = [basePersona, ...extraDirectives].filter(Boolean).join("\n\n");
   // Omitted entirely (not sent as ""), not just skipped, when there is
   // nothing to override with: a profile picked with no system_prompt of its
   // own (e.g. "host") must fall through to the gateway's own profile/
@@ -316,6 +323,8 @@ export async function startLhSession() {
   // empty override silently blank its persona out (see
   // SessionRuntimeConfig.persona_override's "falsy means unset" contract).
   if (finalPersona) params += `&system_prompt=${encodeURIComponent(finalPersona)}`;
+  const idleTopicSeconds = el("lh-idle-topic")?.value;
+  if (idleTopicSeconds) params += `&idle_topic_seconds=${encodeURIComponent(idleTopicSeconds)}`;
 
   lh.opusMode = !!el("lh-opus")?.checked && lhOpusSupported();
   if (el("lh-opus")?.checked && !lh.opusMode) {

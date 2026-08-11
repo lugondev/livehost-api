@@ -6,7 +6,8 @@ Four jobs, and none of them is running a conversation turn:
      token -- never the browser's own ticket, which resolve_ws_identity does
      not (and must not) accept directly
   3. relay both directions
-  4. poll the social scheduler and inject turns as text
+  4. poll the social scheduler and inject turns as text (and, optionally,
+     an idle-topic turn when nothing has happened for a while)
 
 Wire shape to the browser is unchanged from the in-process version --
 {"event": ..., ...} -- because livehost.js reads it.
@@ -33,6 +34,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/livehost", tags=["livehost"])
 
 _SOCIAL_POLL_SECONDS = 0.25
+# Coarser than the social poll: an idle-topic threshold is on the order of
+# tens of seconds to minutes, not milliseconds, so sub-second precision on
+# when it fires is not worth polling this many times more often.
+_IDLE_POLL_SECONDS = 5.0
 
 # How many times the *upstream* conversation socket is redialled after a
 # drop, before the down direction gives up. Deliberately unrelated to the
@@ -120,6 +125,13 @@ async def livehost_stream(websocket: WebSocket) -> None:
 
     q = websocket.query_params
     session_id = q.get("session_id") or str(uuid.uuid4())
+    # 0/absent/garbage all mean "disabled" -- the browser's dropdown only
+    # ever sends a positive integer or omits the param entirely, but this is
+    # attacker/typo-controlled input same as every other query param here.
+    try:
+        idle_topic_seconds = max(0, int(q.get("idle_topic_seconds") or 0))
+    except ValueError:
+        idle_topic_seconds = 0
 
     scheduler = EventScheduler(
         mention_keywords=_mention_keywords(),
@@ -277,17 +289,28 @@ async def livehost_stream(websocket: WebSocket) -> None:
         while True:
             event = await raw_social_queue.get()
             scheduler.enqueue(event)
+            # A comment that arrives but hasn't fired a turn yet (still
+            # batching, or the streamer is mid-turn) is still evidence the
+            # room is live -- must not let poll_idle fire underneath it.
+            relay.note_activity()
 
     async def _poll_social() -> None:
         while True:
             await asyncio.sleep(_SOCIAL_POLL_SECONDS)
             await relay.poll_social()
 
+    async def _poll_idle() -> None:
+        while True:
+            await asyncio.sleep(_IDLE_POLL_SECONDS)
+            await relay.poll_idle(idle_topic_seconds)
+
     tasks = [
         asyncio.create_task(_down()),
         asyncio.create_task(_drain_social()),
         asyncio.create_task(_poll_social()),
     ]
+    if idle_topic_seconds > 0:
+        tasks.append(asyncio.create_task(_poll_idle()))
     try:
         while True:
             message = await websocket.receive()

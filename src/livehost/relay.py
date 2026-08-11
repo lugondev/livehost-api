@@ -8,10 +8,22 @@ the upstream event stream instead -- speech_start sets it, turn_done clears it.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 
 from livehost.orchestrator import LiveHostOrchestrator
 from livehost.scheduler import EventScheduler
+
+# Sent as a "text" turn, same mechanism poll_social uses for a comment --
+# the LLM sees it as the thing to react to, not a system instruction it
+# should acknowledge or explain, hence "don't mention no one commented"
+# rather than leaving that implicit.
+IDLE_TOPIC_PROMPT = (
+    "(Không có bình luận hay sự kiện gì mới trong một lúc. Hãy tự nhiên chuyển "
+    "sang một chủ đề, câu chuyện, hoặc câu hỏi thú vị để giữ không khí live sôi "
+    "động -- đừng nhắc đến việc không có ai bình luận, cứ nói như một host thật "
+    "đang tự dẫn dắt buổi live.)"
+)
 
 
 class Relay:
@@ -21,6 +33,18 @@ class Relay:
         self.orchestrator = LiveHostOrchestrator(scheduler)
         self.voice_active = False
         self.social_turn_in_flight = False
+        # monotonic, not wall clock: only ever compared to itself, and must
+        # never jump backward/forward with a system clock adjustment.
+        self.last_activity = time.monotonic()
+
+    def note_activity(self) -> None:
+        """Reset the idle clock. Called on anything that means the room is
+        NOT quiet: a new social event queuing (ws.py's drain loop), on top
+        of the turn-boundary events pump_down/poll_social already reset it
+        on -- a comment that arrives but hasn't fired a turn yet (still
+        batching, or the streamer is mid-turn) is still evidence the room
+        is live, and must not let poll_idle fire underneath it."""
+        self.last_activity = time.monotonic()
 
     async def pump_down(
         self,
@@ -36,6 +60,7 @@ class Relay:
             event = message.get("event")
             if event == "speech_start":
                 self.voice_active = True
+                self.note_activity()
                 # The streamer talking over the co-host wins, always.
                 if self.social_turn_in_flight:
                     await self.upstream.abort()
@@ -43,6 +68,7 @@ class Relay:
             elif event in ("turn_done", "aborted"):
                 self.voice_active = False
                 self.social_turn_in_flight = False
+                self.note_activity()
             await _maybe_await(send_json(message))
 
     async def pump_up(self, message: dict) -> None:
@@ -76,7 +102,24 @@ class Relay:
             return
         _turn, formatted = result
         self.social_turn_in_flight = True
+        self.note_activity()
         await self.upstream.send_text(formatted)
+
+    async def poll_idle(self, idle_seconds: float) -> None:
+        """Fire a spontaneous-topic turn if nothing (voice or social) has
+        happened for `idle_seconds` -- a real host fills dead air instead of
+        sitting in silence. Same in-flight guard as poll_social, and for the
+        same reason: this and a social turn both ultimately call
+        upstream.send_text, and firing a second one before the first's
+        turn_done would overlap turns on the gateway exactly like the bug
+        poll_social's own guard exists to prevent."""
+        if self.voice_active or self.social_turn_in_flight:
+            return
+        if time.monotonic() - self.last_activity < idle_seconds:
+            return
+        self.social_turn_in_flight = True
+        self.note_activity()
+        await self.upstream.send_text(IDLE_TOPIC_PROMPT)
 
 
 async def _maybe_await(value):

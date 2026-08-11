@@ -88,6 +88,24 @@
             <option value="playful">Cợt nhả</option>
           </select>
         </label>
+        <label>
+          Độ dài trả lời
+          <select id="lh-reply-length">
+            <option value="">Mặc định</option>
+            <option value="1">1 câu</option>
+            <option value="1-2">1-2 câu</option>
+            <option value="2-3">2-3 câu</option>
+          </select>
+        </label>
+        <label title="Nếu không có bình luận/sự kiện gì mới trong khoảng thời gian này, AI sẽ tự nghĩ chủ đề hoặc câu chuyện để nói, giữ không khí live.">
+          Tự nói khi im lặng
+          <select id="lh-idle-topic">
+            <option value="">Tắt</option>
+            <option value="30">30 giây</option>
+            <option value="60">60 giây</option>
+            <option value="120">2 phút</option>
+          </select>
+        </label>
       </div>
       <div class="row">
         <label style="flex-basis: 100%">
@@ -171,6 +189,8 @@
       if (el("lh-profile")) el("lh-profile").addEventListener("change", () => resetLhManualOverrides());
       restoreAndBind("lh-persona");
       restoreAndBind("lh-tone");
+      restoreAndBind("lh-reply-length");
+      restoreAndBind("lh-idle-topic");
 
       loadLivehostEngines();
     </script>

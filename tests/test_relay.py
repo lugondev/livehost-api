@@ -152,3 +152,84 @@ async def test_barge_in_aborts_the_social_turn():
     await relay.pump_down(lambda e: None, lambda b: None)
     assert upstream.aborted == 1
     assert relay.social_turn_in_flight is False
+
+
+async def test_poll_idle_fires_a_spontaneous_topic_after_the_threshold():
+    from livehost.relay import IDLE_TOPIC_PROMPT
+
+    upstream = FakeUpstream()
+    relay = _relay(upstream)
+    relay.last_activity -= 10  # 10s of silence
+
+    await relay.poll_idle(idle_seconds=5)
+
+    assert upstream.sent_text == [IDLE_TOPIC_PROMPT]
+    assert relay.social_turn_in_flight is True
+
+
+async def test_poll_idle_does_not_fire_before_the_threshold():
+    upstream = FakeUpstream()
+    relay = _relay(upstream)
+    relay.last_activity -= 2  # only 2s of silence
+
+    await relay.poll_idle(idle_seconds=5)
+
+    assert upstream.sent_text == []
+
+
+async def test_poll_idle_does_not_fire_while_the_streamer_is_talking():
+    upstream = FakeUpstream()
+    relay = _relay(upstream)
+    relay.last_activity -= 10
+    relay.voice_active = True
+
+    await relay.poll_idle(idle_seconds=5)
+
+    assert upstream.sent_text == []
+
+
+async def test_poll_idle_does_not_fire_while_a_social_turn_is_already_in_flight():
+    """Same overlap-prevention poll_social's own guard exists for: both
+    ultimately call upstream.send_text, and firing a second one before the
+    first's turn_done would overlap turns on the gateway."""
+    upstream = FakeUpstream()
+    relay = _relay(upstream)
+    relay.last_activity -= 10
+    relay.social_turn_in_flight = True
+
+    await relay.poll_idle(idle_seconds=5)
+
+    assert upstream.sent_text == []
+
+
+async def test_a_fired_social_turn_resets_the_idle_clock():
+    from livehost.relay import IDLE_TOPIC_PROMPT
+
+    scheduler = EventScheduler()
+    scheduler.enqueue(_event(kind="comment", user_name="ann", text="hi"))
+    upstream = FakeUpstream()
+    relay = _relay(upstream, scheduler)
+    relay.last_activity -= 100
+
+    await relay.poll_social()
+    relay.social_turn_in_flight = False  # clear the guard poll_idle also checks
+
+    # If last_activity were still 100s stale, this would fire the idle topic
+    # too -- it must not, proving poll_social reset the clock to "now"
+    # rather than leaving it at its pre-turn value.
+    await relay.poll_idle(idle_seconds=5)
+    assert IDLE_TOPIC_PROMPT not in upstream.sent_text
+
+
+async def test_note_activity_resets_the_idle_clock():
+    """ws.py's social-event drain loop calls this directly -- a comment that
+    arrives but hasn't fired a turn yet (still batching, or the streamer is
+    mid-turn) is still evidence the room is live."""
+    upstream = FakeUpstream()
+    relay = _relay(upstream)
+    relay.last_activity -= 100
+
+    relay.note_activity()
+
+    await relay.poll_idle(idle_seconds=5)
+    assert upstream.sent_text == []
