@@ -322,6 +322,17 @@ export async function startLhSession() {
   const pluginUrl = window.location.origin;
   const ticket = GATEWAY_TOKEN;
   if (!ticket) {
+    // TEMPORARY diagnostic (remove once the live "plugin ticket unavailable"
+    // reports are resolved): logs whether the URL's token param was ever
+    // present, without printing the token itself.
+    console.error(
+      "[livehost] no ticket at connect time -- location.search:",
+      location.search,
+      "parsed token present:",
+      Boolean(_pageParams.get("token")),
+      "GATEWAY_TOKEN length:",
+      GATEWAY_TOKEN.length
+    );
     setLhStatus("plugin ticket unavailable -- reopen this tab from the gateway", "status-error");
     setLhSessionUI("idle");
     return;
