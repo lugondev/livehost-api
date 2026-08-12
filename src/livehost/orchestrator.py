@@ -8,19 +8,32 @@ this stays a small, independently testable arbiter.
 from __future__ import annotations
 
 from livehost.scheduler import EventScheduler, SocialTurn
+from livehost.schemas import SocialEvent
+
+
+def _note_suffix(event: SocialEvent) -> str:
+    """A parenthetical viewer-memory note, or "" when there is none --
+    ViewerMemoryStore.note_and_record returns None for a first-time viewer,
+    and this must vanish cleanly rather than render "()"."""
+    return f" ({event.viewer_note})" if event.viewer_note else ""
 
 
 def format_social_turn(turn: SocialTurn) -> str:
     lines: list[str] = []
     for event in turn.events:
         if event.kind == "comment":
-            lines.append(f"[TikTok @{event.user_name}]: {event.text}")
+            lines.append(f"[TikTok @{event.user_name}]{_note_suffix(event)}: {event.text}")
         elif event.kind == "gift":
-            lines.append(f"[TikTok @{event.user_name}] sent a gift: {event.gift_name} (value {event.gift_value})")
+            lines.append(
+                f"[TikTok @{event.user_name}]{_note_suffix(event)} sent a gift: "
+                f"{event.gift_name} (value {event.gift_value})"
+            )
         elif event.kind == "follow":
-            lines.append(f"[TikTok @{event.user_name}] just followed the stream")
+            lines.append(
+                f"[TikTok @{event.user_name}]{_note_suffix(event)} just followed the stream"
+            )
         elif event.kind == "share":
-            lines.append(f"[TikTok @{event.user_name}] shared the stream")
+            lines.append(f"[TikTok @{event.user_name}]{_note_suffix(event)} shared the stream")
         elif event.kind == "like":
             lines.append(f"[TikTok] {event.like_count or 0} new likes")
     if turn.overflow_count:

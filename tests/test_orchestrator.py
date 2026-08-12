@@ -56,3 +56,25 @@ def test_poll_dequeues_and_formats_when_voice_idle():
     assert len(turn.events) == 1
     assert "hi" in text
     assert scheduler.pending_count() == 0
+
+
+def test_format_comment_turn_includes_viewer_note_when_present():
+    turn = SocialTurn(events=[_event(text="xin chao", viewer_note="đã bình luận 3 lần")])
+    text = format_social_turn(turn)
+    # "]" closes the "[TikTok @name]" bracket before the note suffix starts.
+    assert "@Bao] (đã bình luận 3 lần): xin chao" in text
+
+
+def test_format_comment_turn_omits_note_suffix_when_absent():
+    turn = SocialTurn(events=[_event(text="xin chao")])
+    text = format_social_turn(turn)
+    assert "@Bao]: xin chao" in text
+    assert "(" not in text
+
+
+def test_format_gift_turn_includes_viewer_note_when_present():
+    turn = SocialTurn(
+        events=[_event(kind="gift", gift_name="Rose", gift_value=50, viewer_note="từng follow")]
+    )
+    text = format_social_turn(turn)
+    assert "@Bao] (từng follow) sent a gift" in text
