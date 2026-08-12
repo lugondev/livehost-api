@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     offline_poll_interval_seconds: float = 30.0
     watchdog_idle_seconds: float = 300.0
 
+    # Viewer memory (livehost.memory.ViewerMemoryStore): persists per-viewer
+    # comment/like/share/follow/gift history across live sessions.
+    memory_db_path: str = "livehost_memory.db"
+    memory_recent_comments: int = 5
+    memory_retention_days: int = 90
+
     class Config:
         env_prefix = "LIVEHOST_"
 

@@ -15,3 +15,13 @@ def test_social_event_rejects_unknown_kind():
 
     with pytest.raises(ValidationError):
         SocialEvent(id="e1", kind="not-a-kind", user_id="u1", user_name="Alice", timestamp=1.0)
+
+
+def test_social_event_viewer_note_defaults_to_none_and_can_be_set():
+    event = SocialEvent(
+        id="e1", kind="comment", user_id="u1", user_name="Alice", text="hi", timestamp=1.0,
+    )
+    assert event.viewer_note is None
+
+    event.viewer_note = "đã bình luận 2 lần"
+    assert event.viewer_note == "đã bình luận 2 lần"

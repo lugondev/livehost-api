@@ -21,3 +21,7 @@ class SocialEvent(BaseModel):
     gift_value: int | None = None
     like_count: int | None = None
     timestamp: float
+    # Filled in by ws.py's _drain_social loop, from livehost.memory.
+    # ViewerMemoryStore.note_and_record, before this event reaches the
+    # scheduler -- ingestors (tiktok.py) never set this themselves.
+    viewer_note: str | None = None
