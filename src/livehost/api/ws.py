@@ -23,6 +23,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from livehost.auth import introspect
 from livehost.ingest.tiktok import TikTokLiveIngestor
+from livehost.memory import ViewerMemoryStore
 from livehost.registry import LivehostSession, livehost_registry
 from livehost.relay import Relay
 from livehost.scheduler import EventScheduler
@@ -44,6 +45,23 @@ _IDLE_POLL_SECONDS = 5.0
 # ingestor's own TikTokLiveIngestor backoff/offline-poll settings -- these
 # two connections are on separate reconnect budgets by design (see _down()).
 _UPSTREAM_RECONNECT_MAX_ATTEMPTS = 5
+
+_memory_store: ViewerMemoryStore | None = None
+_memory_store_path: str | None = None
+
+
+def _get_memory_store() -> ViewerMemoryStore:
+    """Lazily (re)build the module-level ViewerMemoryStore, rebuilding it
+    whenever settings.memory_db_path has changed since the last call. Reads
+    the path fresh on every call, the same pattern this module already uses
+    for settings.gateway_url (see Upstream(...) below) -- lets tests
+    monkeypatch the path before opening a WS connection and get an isolated
+    store, instead of every test sharing one real on-disk database."""
+    global _memory_store, _memory_store_path
+    if _memory_store is None or _memory_store_path != settings.memory_db_path:
+        _memory_store = ViewerMemoryStore(settings.memory_db_path, settings.memory_recent_comments)
+        _memory_store_path = settings.memory_db_path
+    return _memory_store
 
 
 def _mention_keywords() -> list[str]:
@@ -152,6 +170,12 @@ async def livehost_stream(websocket: WebSocket) -> None:
     except ValueError:
         batch_wait_seconds = 0.0
 
+    memory_id = q.get("memory_id") or ""
+    # "" (never None) is the anonymous-mode collapse point -- same
+    # convention as owner_key below and LivehostSession.user_id elsewhere:
+    # every unauthenticated caller shares one owner scope.
+    owner_key = user_id or ""
+
     scheduler = EventScheduler(
         mention_keywords=_mention_keywords(),
         individual_threshold=settings.individual_threshold,
@@ -182,6 +206,8 @@ async def livehost_stream(websocket: WebSocket) -> None:
         )
         await websocket.close(code=4401, reason="unauthorized")
         return
+
+    _get_memory_store().cleanup(settings.memory_retention_days)
 
     # session_id here is the *local* session_id (browser-supplied, or the
     # uuid generated above when it wasn't) -- not `q.get("session_id")`
@@ -307,6 +333,10 @@ async def livehost_stream(websocket: WebSocket) -> None:
     async def _drain_social() -> None:
         while True:
             event = await raw_social_queue.get()
+            # Recorded unconditionally -- memory is a viewer profile,
+            # independent of whether skip_like_share keeps this particular
+            # event out of the spoken queue below.
+            event.viewer_note = _get_memory_store().note_and_record(owner_key, memory_id, event)
             # A room's like/share volume is not treated as "activity"
             # either (no note_activity() call on this branch) -- silent
             # likes must not keep poll_idle from firing when nothing else

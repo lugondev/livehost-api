@@ -376,3 +376,53 @@ def test_social_turn_does_not_fire_while_the_streamer_is_mid_turn(gateway, authe
     control_texts = [c for c in gateway["control"] if c.get("type") == "text"]
     assert len(control_texts) == 1
     assert "ann" in control_texts[0]["text"]
+
+
+def test_returning_commenter_gets_a_viewer_note_in_the_second_turn(
+    gateway, authed, monkeypatch, tmp_path
+):
+    """A second comment from the same TikTok user_id, under the same
+    memory_id, carries a note referencing the earlier comment -- the
+    co-host 'remembers' having talked to them already this browser."""
+    from livehost.app import app
+    from livehost.registry import livehost_registry
+    from livehost.schemas import SocialEvent
+
+    monkeypatch.setattr("livehost.settings.settings.memory_db_path", str(tmp_path / "memory.db"))
+    monkeypatch.setattr("livehost.api.ws._SOCIAL_POLL_SECONDS", 0.0)
+
+    def _texts():
+        return [c["text"] for c in gateway["control"] if c.get("type") == "text"]
+
+    session_id = "memory-1"
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            f"/v1/livehost/stream?ticket=good&session_id={session_id}&memory_id=browser-abc"
+        ) as ws:
+            ws.receive_json()
+            session = livehost_registry.get(session_id)
+
+            session.ingestor.queue.put_nowait(
+                SocialEvent(
+                    id="e1", kind="comment", user_id="u1", user_name="ann",
+                    text="gia bao nhieu vay shop", timestamp=1.0,
+                )
+            )
+            deadline = time.monotonic() + 5
+            while len(_texts()) < 1 and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+            session.ingestor.queue.put_nowait(
+                SocialEvent(
+                    id="e2", kind="comment", user_id="u1", user_name="ann",
+                    text="minh hoi lai nha", timestamp=2.0,
+                )
+            )
+            deadline = time.monotonic() + 5
+            while len(_texts()) < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+    texts = _texts()
+    assert len(texts) == 2
+    assert "đã bình luận 1 lần" in texts[1]
+    assert "gia bao nhieu vay shop" in texts[1]
