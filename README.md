@@ -102,6 +102,14 @@ The remaining `LIVEHOST_*` settings (`MENTION_KEYWORDS`, `INDIVIDUAL_THRESHOLD`,
 the same defaults they had in the gateway. See `.env.example` for the full
 list with one-line descriptions.
 
+Viewer memory (persistent per-viewer comment/like/share/follow/gift history,
+see `src/livehost/memory.py`) is tuned by three more: `LIVEHOST_MEMORY_DB_PATH`
+(the SQLite file's path -- in `docker-compose.yml` this points at a named
+volume so it survives container recreates), `LIVEHOST_MEMORY_RECENT_COMMENTS`
+(how many of a viewer's recent comments to keep), and
+`LIVEHOST_MEMORY_RETENTION_DAYS` (how long an inactive viewer's history is
+kept before it's purged).
+
 ## The gateway is a hard runtime dependency
 
 This service does not stand on its own: it authenticates itself to the gateway

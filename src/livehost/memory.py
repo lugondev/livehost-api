@@ -43,6 +43,12 @@ _LOOKUP_COLUMNS = (
     "comment_count, liked, shared, followed, gift_count, gift_value_total, recent_comments"
 )
 
+# memory_id is caller-supplied (the browser's own localStorage value, sent
+# verbatim as a WS query param) and lands straight in the primary key --
+# bound it defensively so an authenticated caller cannot mint unbounded
+# distinct buckets by sending an ever-growing string.
+_MAX_MEMORY_ID_LENGTH = 64
+
 
 class ViewerMemoryStore:
     """Not safe for concurrent writers across processes (SQLite file
@@ -62,7 +68,11 @@ class ViewerMemoryStore:
         then persist `event` into that history. Returns None if there is
         nothing worth mentioning yet (first-ever interaction). Never raises
         -- a storage error degrades to "no note," logged, not a dropped
-        social event."""
+        social event. Catches Exception broadly (not just sqlite3.Error):
+        a corrupted recent_comments cell can raise json.JSONDecodeError from
+        _upsert's json.loads, and that must degrade the same way a sqlite
+        error does, or it kills the caller's _drain_social task silently."""
+        memory_id = memory_id[:_MAX_MEMORY_ID_LENGTH]
         try:
             row = self._conn.execute(
                 f"SELECT {_LOOKUP_COLUMNS} FROM viewers "
@@ -72,7 +82,7 @@ class ViewerMemoryStore:
             note = _build_note(row)
             self._upsert(owner_key, memory_id, event, row)
             return note
-        except sqlite3.Error as exc:
+        except Exception as exc:  # noqa: BLE001 - degrade to "no note", never raise
             logger.warning("viewer memory write failed: %s", exc)
             return None
 
@@ -138,6 +148,13 @@ class ViewerMemoryStore:
         except sqlite3.Error as exc:
             logger.warning("viewer memory cleanup failed: %s", exc)
             return 0
+
+    def close(self) -> None:
+        """Close the underlying sqlite3 connection. Callers that rebuild a
+        ViewerMemoryStore (e.g. ws.py's _get_memory_store() when
+        settings.memory_db_path changes) must call this on the old instance
+        first, or its connection's file descriptor leaks."""
+        self._conn.close()
 
 
 def _build_note(row: tuple | None) -> str | None:

@@ -145,7 +145,11 @@ def _note_suffix(event: SocialEvent) -> str:
     return f" ({event.viewer_note})" if event.viewer_note else ""
 ```
 
-Applied uniformly in all five `event.kind` branches, e.g.:
+Applied uniformly in four of the five `event.kind` branches --
+`comment`/`gift`/`follow`/`share`. `like` is deliberately excluded: its
+line (`"[TikTok] {like_count} new likes"`) never names an individual
+viewer, so there is no `@user_name` position to attach a per-viewer note
+to. e.g.:
 
 ```python
 lines.append(f"[TikTok @{event.user_name}]{_note_suffix(event)}: {event.text}")
@@ -163,10 +167,11 @@ All under the existing `LIVEHOST_` env prefix.
 
 ### Browser (`livehost.js` / `index.html`)
 
-On page load, if `localStorage.getItem("lh_memory_id")` is unset, generate
-one (`crypto.randomUUID()`) and store it. Always include
-`memory_id=<value>` as a query param when opening the `/v1/livehost/stream`
-WebSocket. No new UI control.
+Lazily, on first connect (not eagerly on page load): if
+`localStorage.getItem("lh-memory-id")` is unset, generate one
+(`crypto.randomUUID()`) and store it. Always include `memory_id=<value>`
+as a query param when opening the `/v1/livehost/stream` WebSocket. No new
+UI control.
 
 ## Error handling
 

@@ -4,3 +4,14 @@ services:
     ports:
       - "8091:8091"
     env_file: .env
+    environment:
+      # Viewer-memory SQLite file must live on the persistent volume below,
+      # not the default repo-relative path -- otherwise every container
+      # recreate wipes it, defeating the point of a store that's meant to
+      # persist across live sessions.
+      - LIVEHOST_MEMORY_DB_PATH=/data/livehost_memory.db
+    volumes:
+      - livehost-memory:/data
+
+volumes:
+  livehost-memory:

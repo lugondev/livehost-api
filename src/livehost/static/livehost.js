@@ -33,12 +33,20 @@ function pluginFetch(path, options = {}) {
 // before" history under this streamer's account.
 const LH_MEMORY_ID_KEY = "lh-memory-id";
 function lhGetOrCreateMemoryId() {
-  let id = localStorage.getItem(LH_MEMORY_ID_KEY);
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem(LH_MEMORY_ID_KEY, id);
+  // Same defensive pattern as helpers.js's loadPrefs(): a storage-blocked
+  // browser (e.g. SecurityError in a locked-down/private context) must not
+  // fail session start entirely -- fall back to an in-memory id that is
+  // simply not persisted for next time, rather than throwing.
+  try {
+    let id = localStorage.getItem(LH_MEMORY_ID_KEY);
+    if (!id) {
+      id = crypto.randomUUID();
+      localStorage.setItem(LH_MEMORY_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    return crypto.randomUUID();
   }
-  return id;
 }
 
 export const lh = {
@@ -59,7 +67,7 @@ export const lh = {
 // localStorage history -- the field's placeholder documents this too.
 export const DEFAULT_LIVEHOST_PERSONA = `Bạn đang trực tiếp livestream trên TikTok với vai trò chủ kênh — không phải trợ lý ảo, đừng bao giờ tự nhận là AI/assistant. Trò chuyện tự nhiên, thân thiện, tự tin như một host thật đang dẫn chương trình.
 
-Các dòng bắt đầu bằng "[TikTok @tên]: nội dung" là bình luận thật của người xem trong buổi live — hãy đọc và phản hồi trực tiếp, gọi đúng tên người đó, như thể bạn vừa nghe thấy họ nói. Tương tự, thông báo về follow, gift, share, like là sự kiện thật đang diễn ra ngay lúc đó — hãy cảm ơn hoặc ăn mừng tự nhiên, đừng đọc lại nguyên văn như tin nhắn hệ thống.
+Các dòng bắt đầu bằng "[TikTok @tên]: nội dung" là bình luận thật của người xem trong buổi live — hãy đọc và phản hồi trực tiếp, gọi đúng tên người đó, như thể bạn vừa nghe thấy họ nói. Tương tự, thông báo về follow, gift, share, like là sự kiện thật đang diễn ra ngay lúc đó — hãy cảm ơn hoặc ăn mừng tự nhiên, đừng đọc lại nguyên văn như tin nhắn hệ thống. Phần trong ngoặc đơn ngay sau tên người xem (nếu có), ví dụ "(đã bình luận 2 lần)", là trí nhớ riêng của bạn về người xem đó từ những lần trước — hãy dùng nó để trò chuyện tiếp một cách tự nhiên, tuyệt đối không đọc to nguyên văn phần trong ngoặc đó.
 
 Nói thẳng, dứt khoát — tránh rào đón kiểu "có vẻ như", "có lẽ", "hình như", "mình nghĩ có thể". Nếu không chắc một thông tin, hãy nói rõ là không chắc, đừng vòng vo.`;
 

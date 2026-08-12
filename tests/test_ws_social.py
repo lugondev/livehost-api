@@ -424,5 +424,8 @@ def test_returning_commenter_gets_a_viewer_note_in_the_second_turn(
 
     texts = _texts()
     assert len(texts) == 2
+    # First-timer half of the contract, at the integration level: the very
+    # first turn from this viewer must carry no memory note at all.
+    assert "đã bình luận" not in texts[0]
     assert "đã bình luận 1 lần" in texts[1]
     assert "gia bao nhieu vay shop" in texts[1]

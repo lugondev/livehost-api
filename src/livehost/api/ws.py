@@ -48,19 +48,50 @@ _UPSTREAM_RECONNECT_MAX_ATTEMPTS = 5
 
 _memory_store: ViewerMemoryStore | None = None
 _memory_store_path: str | None = None
+# Path for which construction was already attempted and failed -- distinct
+# from _memory_store_path (which only tracks the last *successful* build).
+# Without this, a persistently broken path (e.g. unwritable) would retry
+# ViewerMemoryStore(...) -- opening a real sqlite3 connection -- on every
+# single call, including from the hot _drain_social loop (one call per
+# social event), instead of degrading once and staying degraded until the
+# path actually changes.
+_memory_store_failed_path: str | None = None
 
 
-def _get_memory_store() -> ViewerMemoryStore:
+def _get_memory_store() -> ViewerMemoryStore | None:
     """Lazily (re)build the module-level ViewerMemoryStore, rebuilding it
     whenever settings.memory_db_path has changed since the last call. Reads
     the path fresh on every call, the same pattern this module already uses
     for settings.gateway_url (see Upstream(...) below) -- lets tests
     monkeypatch the path before opening a WS connection and get an isolated
-    store, instead of every test sharing one real on-disk database."""
-    global _memory_store, _memory_store_path
-    if _memory_store is None or _memory_store_path != settings.memory_db_path:
-        _memory_store = ViewerMemoryStore(settings.memory_db_path, settings.memory_recent_comments)
-        _memory_store_path = settings.memory_db_path
+    store, instead of every test sharing one real on-disk database.
+
+    Returns None (instead of raising) when construction itself fails -- e.g.
+    sqlite3.OperationalError on an unwritable path. This call happens right
+    after livehost_registry.claim(...) succeeds, before the try/finally that
+    releases it, so letting a construction error propagate here would leak
+    the claimed session_id forever. Callers must treat None as "memory
+    unavailable, degrade to no notes for this session," not as an error to
+    surface. Logs once per broken path (not on every call) to avoid both
+    log spam and repeatedly retrying a connection that already failed."""
+    global _memory_store, _memory_store_path, _memory_store_failed_path
+    current_path = settings.memory_db_path
+    if current_path == _memory_store_failed_path:
+        return None
+    if _memory_store is None or _memory_store_path != current_path:
+        old_store = _memory_store
+        try:
+            _memory_store = ViewerMemoryStore(current_path, settings.memory_recent_comments)
+        except Exception as exc:  # noqa: BLE001 - must never leak the caller's claimed session
+            logger.warning("viewer memory store unavailable (%s): %s", current_path, exc)
+            _memory_store = None
+            _memory_store_path = None
+            _memory_store_failed_path = current_path
+            return None
+        _memory_store_path = current_path
+        _memory_store_failed_path = None
+        if old_store is not None:
+            old_store.close()
     return _memory_store
 
 
@@ -207,7 +238,9 @@ async def livehost_stream(websocket: WebSocket) -> None:
         await websocket.close(code=4401, reason="unauthorized")
         return
 
-    _get_memory_store().cleanup(settings.memory_retention_days)
+    memory_store = _get_memory_store()
+    if memory_store is not None:
+        memory_store.cleanup(settings.memory_retention_days)
 
     # session_id here is the *local* session_id (browser-supplied, or the
     # uuid generated above when it wasn't) -- not `q.get("session_id")`
@@ -335,8 +368,16 @@ async def livehost_stream(websocket: WebSocket) -> None:
             event = await raw_social_queue.get()
             # Recorded unconditionally -- memory is a viewer profile,
             # independent of whether skip_like_share keeps this particular
-            # event out of the spoken queue below.
-            event.viewer_note = _get_memory_store().note_and_record(owner_key, memory_id, event)
+            # event out of the spoken queue below. memory_store is None when
+            # the store is unavailable (see _get_memory_store) -- that
+            # degrades to "no note for this session," same as any other
+            # storage failure, never a dropped social event.
+            memory_store = _get_memory_store()
+            event.viewer_note = (
+                memory_store.note_and_record(owner_key, memory_id, event)
+                if memory_store is not None
+                else None
+            )
             # A room's like/share volume is not treated as "activity"
             # either (no note_activity() call on this branch) -- silent
             # likes must not keep poll_idle from firing when nothing else
