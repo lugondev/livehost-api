@@ -27,6 +27,20 @@ function pluginFetch(path, options = {}) {
   return fetch(path, { ...options, headers });
 }
 
+// Persistent per-browser id for the backend's viewer-memory feature
+// (livehost.memory.ViewerMemoryStore): generated once, reused forever, so
+// repeated live sessions from this browser share the same "who's commented
+// before" history under this streamer's account.
+const LH_MEMORY_ID_KEY = "lh-memory-id";
+function lhGetOrCreateMemoryId() {
+  let id = localStorage.getItem(LH_MEMORY_ID_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(LH_MEMORY_ID_KEY, id);
+  }
+  return id;
+}
+
 export const lh = {
   ws: null, capture: null, log: [], ctx: null, nextTime: 0, sources: [], chain: null,
   opusMode: false, opusDec: null, opusTs: 0, outRate: 24000, outCodec: "wav", audioGen: 0,
@@ -297,6 +311,7 @@ export async function startLhSession() {
   lh.sessionId = crypto.randomUUID();
   let params = `session_id=${encodeURIComponent(lh.sessionId)}`;
   params += `&sample_rate=${STREAM_SAMPLE_RATE}`;
+  params += `&memory_id=${encodeURIComponent(lhGetOrCreateMemoryId())}`;
   if (profile) params += `&profile=${encodeURIComponent(profile)}`;
   const ttsProfile = el("lh-tts-profile")?.value;
   if (ttsProfile) params += `&tts_profile=${encodeURIComponent(ttsProfile)}`;
