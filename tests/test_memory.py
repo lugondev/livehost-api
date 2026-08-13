@@ -40,12 +40,8 @@ def test_gift_value_accumulates_and_surfaces(tmp_path):
     # current call's event is applied, so accumulation (50 + 25 = 75) only
     # becomes visible in the note returned by a THIRD call.
     store = ViewerMemoryStore(str(tmp_path / "memory.db"))
-    store.note_and_record(
-        "owner-1", "mem-1", _event(kind="gift", gift_name="Rose", gift_value=50)
-    )
-    store.note_and_record(
-        "owner-1", "mem-1", _event(kind="gift", gift_name="Rose", gift_value=25)
-    )
+    store.note_and_record("owner-1", "mem-1", _event(kind="gift", gift_name="Rose", gift_value=50))
+    store.note_and_record("owner-1", "mem-1", _event(kind="gift", gift_name="Rose", gift_value=25))
     note = store.note_and_record(
         "owner-1", "mem-1", _event(kind="gift", gift_name="Rose", gift_value=1)
     )

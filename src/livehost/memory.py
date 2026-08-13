@@ -118,9 +118,19 @@ class ViewerMemoryStore:
                 "comment_count, liked, shared, followed, gift_count, gift_value_total, "
                 "recent_comments, first_seen, last_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
-                    owner_key, memory_id, event.user_id, event.user_name,
-                    comment_count, liked, shared, followed, gift_count, gift_value_total,
-                    json.dumps(recent_comments), now, now,
+                    owner_key,
+                    memory_id,
+                    event.user_id,
+                    event.user_name,
+                    comment_count,
+                    liked,
+                    shared,
+                    followed,
+                    gift_count,
+                    gift_value_total,
+                    json.dumps(recent_comments),
+                    now,
+                    now,
                 ),
             )
         else:
@@ -129,9 +139,18 @@ class ViewerMemoryStore:
                 "followed=?, gift_count=?, gift_value_total=?, recent_comments=?, last_seen=? "
                 "WHERE owner_key=? AND memory_id=? AND platform_user_id=?",
                 (
-                    event.user_name, comment_count, liked, shared, followed,
-                    gift_count, gift_value_total, json.dumps(recent_comments), now,
-                    owner_key, memory_id, event.user_id,
+                    event.user_name,
+                    comment_count,
+                    liked,
+                    shared,
+                    followed,
+                    gift_count,
+                    gift_value_total,
+                    json.dumps(recent_comments),
+                    now,
+                    owner_key,
+                    memory_id,
+                    event.user_id,
                 ),
             )
         self._conn.commit()

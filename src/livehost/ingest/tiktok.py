@@ -101,7 +101,9 @@ class TikTokLiveIngestor:
         while not self._stop_requested and generation == self._generation:
             try:
                 self.state = (
-                    IngestorState.CONNECTING if backoff == self.backoff_initial else IngestorState.RECONNECTING
+                    IngestorState.CONNECTING
+                    if backoff == self.backoff_initial
+                    else IngestorState.RECONNECTING
                 )
                 client = self._client_factory(self.unique_id)
                 await client.connect()
@@ -146,9 +148,13 @@ class TikTokLiveIngestor:
         try:
             while True:
                 try:
-                    raw_event = await asyncio.wait_for(events_iter.__anext__(), timeout=self.watchdog_idle_seconds)
+                    raw_event = await asyncio.wait_for(
+                        events_iter.__anext__(), timeout=self.watchdog_idle_seconds
+                    )
                 except asyncio.TimeoutError:
-                    logger.warning("tiktok ingestor stale for %s, forcing reconnect", self.unique_id)
+                    logger.warning(
+                        "tiktok ingestor stale for %s, forcing reconnect", self.unique_id
+                    )
                     stale = True
                     break
                 except StopAsyncIteration:
@@ -181,9 +187,12 @@ def avatar_url(user) -> str | None:
 
 def map_comment(event) -> SocialEvent:
     return SocialEvent(
-        id=str(uuid.uuid4()), kind="comment",
-        user_id=event.user.unique_id, user_name=event.user.nickname,
-        user_avatar_url=avatar_url(event.user), text=event.comment,
+        id=str(uuid.uuid4()),
+        kind="comment",
+        user_id=event.user.unique_id,
+        user_name=event.user.nickname,
+        user_avatar_url=avatar_url(event.user),
+        text=event.comment,
         timestamp=time.time(),
     )
 
@@ -192,9 +201,12 @@ def map_gift(event) -> SocialEvent | None:
     if event.streaking:
         return None  # wait for the streak to finish so gift_value is final
     return SocialEvent(
-        id=str(uuid.uuid4()), kind="gift",
-        user_id=event.user.unique_id, user_name=event.user.nickname,
-        user_avatar_url=avatar_url(event.user), gift_name=event.gift.name,
+        id=str(uuid.uuid4()),
+        kind="gift",
+        user_id=event.user.unique_id,
+        user_name=event.user.nickname,
+        user_avatar_url=avatar_url(event.user),
+        gift_name=event.gift.name,
         gift_value=event.repeat_count * event.gift.diamond_count,
         timestamp=time.time(),
     )
@@ -202,26 +214,35 @@ def map_gift(event) -> SocialEvent | None:
 
 def map_like(event) -> SocialEvent:
     return SocialEvent(
-        id=str(uuid.uuid4()), kind="like",
-        user_id=event.user.unique_id, user_name=event.user.nickname,
-        user_avatar_url=avatar_url(event.user), like_count=event.count,
+        id=str(uuid.uuid4()),
+        kind="like",
+        user_id=event.user.unique_id,
+        user_name=event.user.nickname,
+        user_avatar_url=avatar_url(event.user),
+        like_count=event.count,
         timestamp=time.time(),
     )
 
 
 def map_follow(event) -> SocialEvent:
     return SocialEvent(
-        id=str(uuid.uuid4()), kind="follow",
-        user_id=event.user.unique_id, user_name=event.user.nickname,
-        user_avatar_url=avatar_url(event.user), timestamp=time.time(),
+        id=str(uuid.uuid4()),
+        kind="follow",
+        user_id=event.user.unique_id,
+        user_name=event.user.nickname,
+        user_avatar_url=avatar_url(event.user),
+        timestamp=time.time(),
     )
 
 
 def map_share(event) -> SocialEvent:
     return SocialEvent(
-        id=str(uuid.uuid4()), kind="share",
-        user_id=event.user.unique_id, user_name=event.user.nickname,
-        user_avatar_url=avatar_url(event.user), timestamp=time.time(),
+        id=str(uuid.uuid4()),
+        kind="share",
+        user_id=event.user.unique_id,
+        user_name=event.user.nickname,
+        user_avatar_url=avatar_url(event.user),
+        timestamp=time.time(),
     )
 
 

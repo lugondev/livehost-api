@@ -31,13 +31,17 @@ def test_map_comment():
 
 def test_map_gift_skips_ongoing_streak():
     streaking_event = SimpleNamespace(
-        user=_user(), streaking=True, repeat_count=3,
+        user=_user(),
+        streaking=True,
+        repeat_count=3,
         gift=SimpleNamespace(name="Rose", diamond_count=1),
     )
     assert map_gift(streaking_event) is None
 
     finished_event = SimpleNamespace(
-        user=_user(), streaking=False, repeat_count=3,
+        user=_user(),
+        streaking=False,
+        repeat_count=3,
         gift=SimpleNamespace(name="Rose", diamond_count=1),
     )
     social = map_gift(finished_event)

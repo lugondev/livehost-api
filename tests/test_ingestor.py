@@ -7,7 +7,9 @@ from livehost.schemas import SocialEvent
 
 
 def _event(i: int) -> SocialEvent:
-    return SocialEvent(id=f"e{i}", kind="comment", user_id="u", user_name="user", text=str(i), timestamp=float(i))
+    return SocialEvent(
+        id=f"e{i}", kind="comment", user_id="u", user_name="user", text=str(i), timestamp=float(i)
+    )
 
 
 class FakeClient:
@@ -59,7 +61,10 @@ def _reset_fake_client():
 
 async def test_start_connects_and_forwards_events_to_queue():
     scripts = [[_event(1), _event(2)]]
-    factory = lambda uid: FakeClient(uid, [scripts.pop(0)])
+
+    def factory(uid):
+        return FakeClient(uid, [scripts.pop(0)])
+
     queue: asyncio.Queue = asyncio.Queue()
     ingestor = TikTokLiveIngestor(client_factory=factory, queue=queue, watchdog_idle_seconds=3600)
 
@@ -77,10 +82,16 @@ async def test_start_connects_and_forwards_events_to_queue():
 
 async def test_room_offline_polls_slowly_then_recovers():
     scripts = [RoomOfflineError("offline"), [_event(1)]]
-    factory = lambda uid: FakeClient(uid, [scripts.pop(0)])
+
+    def factory(uid):
+        return FakeClient(uid, [scripts.pop(0)])
+
     queue: asyncio.Queue = asyncio.Queue()
     ingestor = TikTokLiveIngestor(
-        client_factory=factory, queue=queue, offline_poll_interval=0.01, watchdog_idle_seconds=3600,
+        client_factory=factory,
+        queue=queue,
+        offline_poll_interval=0.01,
+        watchdog_idle_seconds=3600,
     )
 
     await ingestor.start("alice")
@@ -95,11 +106,17 @@ async def test_room_offline_polls_slowly_then_recovers():
 
 async def test_transient_error_backs_off_then_reconnects():
     scripts = [RuntimeError("network blip"), [_event(1)]]
-    factory = lambda uid: FakeClient(uid, [scripts.pop(0)])
+
+    def factory(uid):
+        return FakeClient(uid, [scripts.pop(0)])
+
     queue: asyncio.Queue = asyncio.Queue()
     ingestor = TikTokLiveIngestor(
-        client_factory=factory, queue=queue,
-        backoff_initial=0.01, backoff_max=0.02, watchdog_idle_seconds=3600,
+        client_factory=factory,
+        queue=queue,
+        backoff_initial=0.01,
+        backoff_max=0.02,
+        watchdog_idle_seconds=3600,
     )
 
     await ingestor.start("alice")
@@ -114,11 +131,17 @@ async def test_mid_stream_error_backs_off_then_reconnects():
     # event is delivered first, then events() raises mid-stream -- exercising
     # the `except Exception` branch inside _drain rather than the one in _run.
     scripts = [[_event(1), RuntimeError("mid-stream blip")], [_event(2)]]
-    factory = lambda uid: FakeClient(uid, [scripts.pop(0)])
+
+    def factory(uid):
+        return FakeClient(uid, [scripts.pop(0)])
+
     queue: asyncio.Queue = asyncio.Queue()
     ingestor = TikTokLiveIngestor(
-        client_factory=factory, queue=queue,
-        backoff_initial=0.01, backoff_max=0.02, watchdog_idle_seconds=3600,
+        client_factory=factory,
+        queue=queue,
+        backoff_initial=0.01,
+        backoff_max=0.02,
+        watchdog_idle_seconds=3600,
     )
 
     await ingestor.start("alice")
@@ -133,10 +156,16 @@ async def test_mid_stream_error_backs_off_then_reconnects():
 
 async def test_clean_disconnect_signal_reconnects_immediately():
     scripts = [[_event(1), None], [_event(2)]]
-    factory = lambda uid: FakeClient(uid, [scripts.pop(0)])
+
+    def factory(uid):
+        return FakeClient(uid, [scripts.pop(0)])
+
     queue: asyncio.Queue = asyncio.Queue()
     ingestor = TikTokLiveIngestor(
-        client_factory=factory, queue=queue, backoff_initial=0.01, watchdog_idle_seconds=3600,
+        client_factory=factory,
+        queue=queue,
+        backoff_initial=0.01,
+        watchdog_idle_seconds=3600,
     )
 
     await ingestor.start("alice")
@@ -148,10 +177,16 @@ async def test_clean_disconnect_signal_reconnects_immediately():
 
 async def test_stale_connection_forces_reconnect_via_watchdog():
     scripts = [[_event(1)], [_event(2)]]
-    factory = lambda uid: FakeClient(uid, [scripts.pop(0)])
+
+    def factory(uid):
+        return FakeClient(uid, [scripts.pop(0)])
+
     queue: asyncio.Queue = asyncio.Queue()
     ingestor = TikTokLiveIngestor(
-        client_factory=factory, queue=queue, backoff_initial=0.01, watchdog_idle_seconds=0.05,
+        client_factory=factory,
+        queue=queue,
+        backoff_initial=0.01,
+        watchdog_idle_seconds=0.05,
     )
 
     await ingestor.start("alice")
@@ -182,8 +217,11 @@ async def test_client_factory_construction_failure_sets_error_state_and_recovers
 
     queue: asyncio.Queue = asyncio.Queue()
     ingestor = TikTokLiveIngestor(
-        client_factory=factory, queue=queue,
-        backoff_initial=0.05, backoff_max=0.1, watchdog_idle_seconds=3600,
+        client_factory=factory,
+        queue=queue,
+        backoff_initial=0.05,
+        backoff_max=0.1,
+        watchdog_idle_seconds=3600,
     )
 
     await ingestor.start("alice")
@@ -199,7 +237,10 @@ async def test_client_factory_construction_failure_sets_error_state_and_recovers
 
 async def test_starting_twice_stops_the_previous_connection():
     scripts = [[_event(1)], [_event(2)]]
-    factory = lambda uid: FakeClient(uid, [scripts.pop(0)])
+
+    def factory(uid):
+        return FakeClient(uid, [scripts.pop(0)])
+
     queue: asyncio.Queue = asyncio.Queue()
     ingestor = TikTokLiveIngestor(client_factory=factory, queue=queue, watchdog_idle_seconds=3600)
 

@@ -404,8 +404,12 @@ def test_returning_commenter_gets_a_viewer_note_in_the_second_turn(
 
             session.ingestor.queue.put_nowait(
                 SocialEvent(
-                    id="e1", kind="comment", user_id="u1", user_name="ann",
-                    text="gia bao nhieu vay shop", timestamp=1.0,
+                    id="e1",
+                    kind="comment",
+                    user_id="u1",
+                    user_name="ann",
+                    text="gia bao nhieu vay shop",
+                    timestamp=1.0,
                 )
             )
             deadline = time.monotonic() + 5
@@ -414,8 +418,12 @@ def test_returning_commenter_gets_a_viewer_note_in_the_second_turn(
 
             session.ingestor.queue.put_nowait(
                 SocialEvent(
-                    id="e2", kind="comment", user_id="u1", user_name="ann",
-                    text="minh hoi lai nha", timestamp=2.0,
+                    id="e2",
+                    kind="comment",
+                    user_id="u1",
+                    user_name="ann",
+                    text="minh hoi lai nha",
+                    timestamp=2.0,
                 )
             )
             deadline = time.monotonic() + 5
